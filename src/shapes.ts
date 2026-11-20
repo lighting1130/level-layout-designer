@@ -24,14 +24,7 @@ export function shapePolygon(kind: ShapeKind, a: Pt, b: Pt, constrain: boolean):
     if (constrain) b = snapAngle(a, b);
     return { pts: [a, b], closed: false };
   }
-  let x0 = Math.min(a.x, b.x), y0 = Math.min(a.y, b.y);
-  let w = Math.abs(b.x - a.x), h = Math.abs(b.y - a.y);
-  if (constrain) {
-    const m = Math.max(w, h);
-    if (b.x < a.x) x0 = a.x - m;
-    if (b.y < a.y) y0 = a.y - m;
-    w = h = m;
-  }
+  const { x0, y0, w, h } = shapeBox(a, b, constrain);
   const cx = x0 + w / 2, cy = y0 + h / 2;
   switch (kind) {
     case "rect":
@@ -67,17 +60,13 @@ function snapAngle(a: Pt, b: Pt): Pt {
   return { x: a.x + len * Math.cos(ang), y: a.y + len * Math.sin(ang) };
 }
 
-/**
- * 过起点、终点和弯曲控制点的圆弧。三点共线时退化为直线。
- * 返回弧线上的采样点。
- */
-export function arcPoints(start: Pt, end: Pt, bend: Pt): Pt[] {
+/** 过起点、终点和控制点的圆。三点几乎共线时返回 null（按直线处理） */
+export function arcCircle(start: Pt, end: Pt, bend: Pt): { ux: number; uy: number; r: number; t0: number; sweep: number } | null {
   const { x: ax, y: ay } = start, { x: bx, y: by } = bend, { x: cx, y: cy } = end;
   const d = 2 * (ax * (by - cy) + bx * (cy - ay) + cx * (ay - by));
   const chord = Math.hypot(cx - ax, cy - ay);
-  // 控制点离弦线太近（几乎是直线）时直接画直线
   const dist = Math.abs((cx - ax) * (ay - by) - (ax - bx) * (cy - ay)) / (chord || 1);
-  if (Math.abs(d) < 1e-12 || dist < chord * 0.01) return [start, end];
+  if (Math.abs(d) < 1e-12 || dist < chord * 0.01) return null;
   const a2 = ax * ax + ay * ay, b2 = bx * bx + by * by, c2 = cx * cx + cy * cy;
   const ux = (a2 * (by - cy) + b2 * (cy - ay) + c2 * (ay - by)) / d;
   const uy = (a2 * (cx - bx) + b2 * (ax - cx) + c2 * (bx - ax)) / d;
@@ -89,15 +78,35 @@ export function arcPoints(start: Pt, end: Pt, bend: Pt): Pt[] {
   const norm = (t: number) => ((t % (2 * Math.PI)) + 2 * Math.PI) % (2 * Math.PI);
   let sweep = norm(t1 - t0);
   if (norm(tb - t0) > sweep) sweep -= 2 * Math.PI;
-  const N = Math.max(16, Math.ceil(Math.abs(sweep) * 64));
+  return { ux, uy, r, t0, sweep };
+}
+
+/** 过起点、终点和弯曲控制点的圆弧上的采样点。三点共线时退化为直线。 */
+export function arcPoints(start: Pt, end: Pt, bend: Pt): Pt[] {
+  const c = arcCircle(start, end, bend);
+  if (!c) return [start, end];
+  const N = Math.max(16, Math.ceil(Math.abs(c.sweep) * 64));
   const pts: Pt[] = [];
   for (let n = 0; n <= N; n++) {
-    const t = t0 + (sweep * n) / N;
-    pts.push({ x: ux + r * Math.cos(t), y: uy + r * Math.sin(t) });
+    const t = c.t0 + (c.sweep * n) / N;
+    pts.push({ x: c.ux + c.r * Math.cos(t), y: c.uy + c.r * Math.sin(t) });
   }
   pts[0] = start;
   pts[N] = end;
   return pts;
+}
+
+/** 图形的外接框（按住 Shift 时为正方形） */
+export function shapeBox(a: Pt, b: Pt, constrain: boolean) {
+  let x0 = Math.min(a.x, b.x), y0 = Math.min(a.y, b.y);
+  let w = Math.abs(b.x - a.x), h = Math.abs(b.y - a.y);
+  if (constrain) {
+    const m = Math.max(w, h);
+    if (b.x < a.x) x0 = a.x - m;
+    if (b.y < a.y) y0 = a.y - m;
+    w = h = m;
+  }
+  return { x0, y0, w, h };
 }
 
 /** 沿折线经过的所有格子（格子边长 s） */

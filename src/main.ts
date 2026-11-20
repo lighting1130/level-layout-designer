@@ -2,6 +2,7 @@ import { Camera } from "./camera";
 import { CELL_SIZE, SUBDIVISION, brushLevel, drawBackground, drawGrid, finestLevel, levelStep } from "./grid";
 import { CellLayer, type Change } from "./cells";
 import { MAX_SHAPE_CELLS, SHAPE_LABELS, TooManyCellsError, arcPoints, rasterizeFill, rasterizeThickStroke, shapePolygon, type CellIJ, type Pt, type ShapeKind } from "./shapes";
+import { drawVector, drawVectors, hitVector, isClosed, sanitizeVectors, type VectorShape } from "./vectors";
 import { PROJECT_FORMAT, PROJECT_VERSION, parseProject, projectFileName, type ProjectFile } from "./project";
 
 const canvas = document.getElementById("canvas") as HTMLCanvasElement;
@@ -71,8 +72,12 @@ function selectEntry(id: number) {
 function recolor(from: string, to: string) {
   if (from === to) return;
   layer.recolor(from, to);
+  // 平滑图形对象在当前列表和撤销记录之间共享，统一改一次即可
+  const shapes = new Set<VectorShape>(vectors);
+  for (const stack of [undoStack, redoStack]) for (const e of stack) e.vectors?.forEach((v) => shapes.add(v));
+  for (const v of shapes) if (v.color === from) v.color = to;
   for (const stack of [undoStack, redoStack]) {
-    for (const ch of stack) for (const c of ch.values()) if (c && c.color === from) c.color = to;
+    for (const ch of stack) for (const c of ch.cells.values()) if (c && c.color === from) c.color = to;
   }
   save();
   requestRender();
@@ -212,10 +217,36 @@ shapeFill.addEventListener("change", () => { shapeFill.blur(); setTool("shape");
 const strokeOptions = $("stroke-options");
 const strokeInput = $("stroke-width") as HTMLInputElement;
 const STROKE_KEY = "level-layout-designer.stroke.v1";
+// 绘制模式：格子（逐格填色）或平滑（矢量线条）
+const SMOOTH_KEY = "level-layout-designer.smooth.v1";
+let smooth = false;
+try { smooth = localStorage.getItem(SMOOTH_KEY) === "1"; } catch { /* 忽略 */ }
 let strokeWidth = 1;
+/** 格子模式只能是整数格；平滑模式可以细到 0.1 格 */
+function clampStroke(n: number) {
+  if (!isFinite(n) || n <= 0) n = smooth ? 0.1 : 1;
+  return smooth ? Math.max(0.1, Math.min(99, Math.round(n * 10) / 10)) : Math.max(1, Math.min(99, Math.round(n)));
+}
 try { strokeWidth = clampStroke(Number(localStorage.getItem(STROKE_KEY)) || 1); } catch { /* 忽略 */ }
 strokeInput.value = String(strokeWidth);
-function clampStroke(n: number) { return Math.max(1, Math.min(99, Math.round(n) || 1)); }
+function strokeStep(dir: 1 | -1) {
+  if (!smooth) return setStroke(strokeWidth + dir);
+  // 平滑模式：1 格以下每次 0.1，以上每次 0.5
+  const step = strokeWidth < 1 || (dir < 0 && strokeWidth <= 1) ? 0.1 : 0.5;
+  setStroke(strokeWidth + dir * step);
+}
+function setSmooth(on: boolean) {
+  smooth = on;
+  try { localStorage.setItem(SMOOTH_KEY, on ? "1" : "0"); } catch { /* 忽略 */ }
+  $("mode-cells").setAttribute("aria-pressed", String(!on));
+  $("mode-smooth").setAttribute("aria-pressed", String(on));
+  strokeInput.step = on ? "0.1" : "1";
+  strokeInput.min = on ? "0.1" : "1";
+  cancelDraft();
+  setStroke(strokeWidth);
+}
+$("mode-cells").addEventListener("click", () => setSmooth(false));
+$("mode-smooth").addEventListener("click", () => setSmooth(true));
 function setStroke(n: number) {
   strokeWidth = clampStroke(n);
   strokeInput.value = String(strokeWidth);
@@ -225,18 +256,22 @@ function setStroke(n: number) {
 }
 strokeInput.addEventListener("change", () => { setStroke(Number(strokeInput.value)); strokeInput.blur(); });
 strokeInput.addEventListener("keydown", (e) => { if (e.key === "Enter" || e.key === "Escape") strokeInput.blur(); });
-$("stroke-dec").addEventListener("click", () => setStroke(strokeWidth - 1));
-$("stroke-inc").addEventListener("click", () => setStroke(strokeWidth + 1));
+$("stroke-dec").addEventListener("click", () => strokeStep(-1));
+$("stroke-inc").addEventListener("click", () => strokeStep(1));
 
 // ---------------- 撤销 / 重做 ----------------
-const undoStack: Change[] = [];
-const redoStack: Change[] = [];
+/** 一步撤销：格子的修改记录 + （若有改动）修改前的平滑图形列表 */
+interface Entry { cells: Change; vectors?: VectorShape[] }
+const undoStack: Entry[] = [];
+const redoStack: Entry[] = [];
+/** 平滑图形层（画在格子和网格之上） */
+let vectors: VectorShape[] = [];
 const btnUndo = $("btn-undo") as HTMLButtonElement;
 const btnRedo = $("btn-redo") as HTMLButtonElement;
 
-function commit(change: Change) {
-  if (change.size === 0) return;
-  undoStack.push(change);
+function commit(change: Change, vectorsBefore?: VectorShape[]) {
+  if (change.size === 0 && !vectorsBefore) return;
+  undoStack.push({ cells: change, vectors: vectorsBefore });
   if (undoStack.length > 200) undoStack.shift();
   redoStack.length = 0;
   afterEdit();
@@ -244,14 +279,19 @@ function commit(change: Change) {
 function undo() {
   const c = undoStack.pop();
   if (!c) return;
-  redoStack.push(layer.apply(c));
+  redoStack.push(applyEntry(c));
   afterEdit();
 }
 function redo() {
   const c = redoStack.pop();
   if (!c) return;
-  undoStack.push(layer.apply(c));
+  undoStack.push(applyEntry(c));
   afterEdit();
+}
+function applyEntry(e: Entry): Entry {
+  const inv: Entry = { cells: layer.apply(e.cells) };
+  if (e.vectors) { inv.vectors = vectors; vectors = e.vectors; }
+  return inv;
 }
 function afterEdit() {
   btnUndo.disabled = undoStack.length === 0;
@@ -264,16 +304,22 @@ btnRedo.addEventListener("click", redo);
 $("btn-clear").addEventListener("click", () => {
   const ch: Change = new Map();
   layer.clear(ch);
-  commit(ch);
+  const before = vectors.length ? vectors : undefined;
+  vectors = [];
+  commit(ch, before);
 });
 
 // ---------------- 本地保存（刷新页面不丢） ----------------
 const STORAGE_KEY = "level-layout-designer.cells.v1";
+const VECTOR_KEY = "level-layout-designer.vectors.v1";
 let saveTimer = 0;
 function flushSave() {
   clearTimeout(saveTimer);
   saveTimer = 0;
-  try { localStorage.setItem(STORAGE_KEY, JSON.stringify(layer.toJSON())); } catch { /* 存储不可用时忽略 */ }
+  try {
+    localStorage.setItem(STORAGE_KEY, JSON.stringify(layer.toJSON()));
+    localStorage.setItem(VECTOR_KEY, JSON.stringify(vectors));
+  } catch { /* 存储不可用时忽略 */ }
 }
 function save() {
   clearTimeout(saveTimer);
@@ -284,6 +330,8 @@ window.addEventListener("pagehide", () => { if (saveTimer) flushSave(); });
 try {
   const raw = localStorage.getItem(STORAGE_KEY);
   if (raw) layer.load(JSON.parse(raw));
+  const rawV = localStorage.getItem(VECTOR_KEY);
+  if (rawV) vectors = sanitizeVectors(JSON.parse(rawV));
 } catch { /* 忽略损坏或不可用的存储 */ }
 
 // ---------------- 渲染 ----------------
@@ -312,6 +360,19 @@ function cellAt(sx: number, sy: number, k: number) {
 }
 
 function drawHover() {
+  if (hover && !draft && smooth && (tool === "arc" || tool === "shape") && mode !== "pan" && !spaceDown) {
+    // 平滑模式：显示吸附到的网格交点
+    const p = snapPoint(hover.x, hover.y, activeLevel());
+    const q = cam.worldToScreen(p.x, p.y);
+    ctx.beginPath();
+    ctx.arc(q.x, q.y, 4, 0, Math.PI * 2);
+    ctx.fillStyle = currentColor;
+    ctx.fill();
+    ctx.strokeStyle = "#ffffff";
+    ctx.lineWidth = 1.5;
+    ctx.stroke();
+    return;
+  }
   if (!hover || draft || mode === "pan" || mode === "pinch" || tool === "hand" || spaceDown) return;
   const c = cellAt(hover.x, hover.y, activeLevel());
   const s = levelStep(c.k);
@@ -335,6 +396,7 @@ function frame() {
     drawBackground(ctx, width, height);
     layer.draw(ctx, cam, width, height);
     drawGrid(ctx, cam, width, height);
+    drawVectors(ctx, cam, vectors);
     drawDraft();
     drawHover();
     const hint = draftHint();
@@ -379,7 +441,7 @@ type Mode = "none" | "paint" | "draw" | "pan" | "pinch";
 let mode: Mode = "none";
 const pointers = new Map<number, { x: number; y: number }>();
 let pinchDist = 0;
-let stroke: { change: Change; k: number; last: { x: number; y: number } } | null = null;
+let stroke: { change: Change; k: number; last: { x: number; y: number }; vectorsBefore?: VectorShape[] } | null = null;
 
 /** 一笔之内锁定格子层级，避免中途缩放导致粗细混杂 */
 function activeLevel() {
@@ -394,9 +456,20 @@ function localPoint(e: { clientX: number; clientY: number }) {
 function applyBrushAt(sx: number, sy: number) {
   if (!stroke) return false;
   const c = cellAt(sx, sy, stroke.k);
-  return tool === "eraser"
-    ? layer.erase(c.k, c.i, c.j, stroke.change)
-    : layer.paint(c.k, c.i, c.j, currentColor, stroke.change);
+  if (tool === "eraser") {
+    let changed = layer.erase(c.k, c.i, c.j, stroke.change);
+    // 橡皮碰到的平滑图形整条删除
+    const w = cam.screenToWorld(sx, sy);
+    const tol = Math.max(levelStep(stroke.k) / 2, 4 / cam.zoom);
+    const kept = vectors.filter((v) => !hitVector(v, w.x, w.y, tol));
+    if (kept.length !== vectors.length) {
+      if (!stroke.vectorsBefore) stroke.vectorsBefore = vectors;
+      vectors = kept;
+      changed = true;
+    }
+    return changed;
+  }
+  return layer.paint(c.k, c.i, c.j, currentColor, stroke.change);
 }
 
 /** 沿上一点到当前点插值，快速拖动也不会漏格 */
@@ -415,7 +488,7 @@ function paintSegment(a: { x: number; y: number }, b: { x: number; y: number }) 
 
 function endStroke() {
   if (stroke) {
-    commit(stroke.change);
+    commit(stroke.change, stroke.vectorsBefore);
     stroke = null;
   }
 }
@@ -436,10 +509,20 @@ interface Draft {
   /** drag: 正在拖终点；pickEnd: 等待点击终点；bend: 调整弯曲；bendDrag: 按住调整弯曲 */
   phase: "drag" | "pickEnd" | "bend" | "bendDrag";
   constrain: boolean;
+  /** 平滑模式：生成矢量图形而不是格子 */
+  smooth: boolean;
   cells: CellIJ[];
   tooMany: boolean;
 }
 let draft: Draft | null = null;
+
+/** 格子模式吸附到格子中心，平滑模式吸附到网格交点 */
+function snapPoint(sx: number, sy: number, k: number): Pt {
+  if (!smooth) return snapToCellCenter(sx, sy, k);
+  const w = cam.screenToWorld(sx, sy);
+  const s = levelStep(k);
+  return { x: Math.round(w.x / s) * s, y: Math.round(w.y / s) * s };
+}
 
 function snapToCellCenter(sx: number, sy: number, k: number): Pt {
   const w = cam.screenToWorld(sx, sy);
@@ -454,6 +537,7 @@ function draftGeometry(d: Draft): { pts: Pt[]; closed: boolean } {
 
 function updateDraftCells() {
   if (!draft) return;
+  if (draft.smooth) { draft.cells = []; draft.tooMany = false; return; }
   const s = levelStep(draft.k);
   const g = draftGeometry(draft);
   try {
@@ -473,9 +557,20 @@ function updateDraftCells() {
   }
 }
 
+function draftVector(d: Draft): VectorShape {
+  return {
+    kind: d.kind, a: d.a, b: d.b, bend: d.bend, constrain: d.constrain, color: currentColor,
+    width: strokeWidth * levelStep(d.k), fill: isClosed(d) && shapeFill.checked,
+  };
+}
+
 function commitDraft() {
   if (!draft) return;
-  if (draft.tooMany) {
+  if (draft.smooth) {
+    const before = vectors;
+    vectors = [...vectors, draftVector(draft)];
+    commit(new Map(), before);
+  } else if (draft.tooMany) {
     toast(`图形太大：超过 ${MAX_SHAPE_CELLS.toLocaleString()} 个格子。请缩小视图（笔刷格子变大）后再画。`, true);
   } else {
     const change: Change = new Map();
@@ -493,6 +588,7 @@ function cancelDraft() {
 function drawDraft() {
   if (!draft) return;
   const s = levelStep(draft.k);
+  if (draft.smooth) drawVector(ctx, cam, draftVector(draft), 0.75);
   ctx.globalAlpha = 0.6;
   ctx.fillStyle = currentColor;
   for (const c of draft.cells) {
@@ -567,14 +663,14 @@ canvas.addEventListener("pointerdown", (e) => {
     mode = "draw";
     const k = draft ? draft.k : brushLevel(cam.zoom);
     if (draft && draft.phase === "pickEnd") {
-      draft.b = snapToCellCenter(p.x, p.y, k);
+      draft.b = snapPoint(p.x, p.y, k);
       draft.phase = "drag";
     } else if (draft && draft.phase === "bend") {
       draft.bend = cam.screenToWorld(p.x, p.y);
       draft.phase = "bendDrag";
     } else {
-      const a = snapToCellCenter(p.x, p.y, k);
-      draft = { kind: tool === "arc" ? "arc" : (shapeKindSel.value as ShapeKind), k, a, b: a, bend: null, phase: "drag", constrain: e.shiftKey, cells: [], tooMany: false };
+      const a = snapPoint(p.x, p.y, k);
+      draft = { kind: tool === "arc" ? "arc" : (shapeKindSel.value as ShapeKind), k, a, b: a, bend: null, phase: "drag", constrain: e.shiftKey, smooth, cells: [], tooMany: false };
     }
     updateDraftCells();
   } else if (e.button === 0) {
@@ -594,7 +690,7 @@ canvas.addEventListener("pointermove", (e) => {
     draft.bend = cam.screenToWorld(p.x, p.y);
     updateDraftCells();
   } else if (draft && (draft.phase === "pickEnd" || (draft.phase === "drag" && mode === "draw"))) {
-    draft.b = snapToCellCenter(p.x, p.y, draft.k);
+    draft.b = snapPoint(p.x, p.y, draft.k);
     draft.constrain = e.shiftKey;
     updateDraftCells();
   }
@@ -705,8 +801,8 @@ window.addEventListener("keydown", (e) => {
   else if (e.key === "e" || e.key === "E") setTool("eraser");
   else if (e.key === "h" || e.key === "H") setTool("hand");
   else if (e.key === "a" || e.key === "A") setTool("arc");
-  else if (e.key === "[") setStroke(strokeWidth - 1);
-  else if (e.key === "]") setStroke(strokeWidth + 1);
+  else if (e.key === "[") strokeStep(-1);
+  else if (e.key === "]") strokeStep(1);
   else if (e.key === "g" || e.key === "G") setTool("shape");
   else if (/^[1-9]$/.test(e.key)) {
     const entry = legend[Number(e.key) - 1];
@@ -757,6 +853,7 @@ function buildProject(): ProjectFile {
     view: { x: cam.x + width / 2 / cam.zoom, y: cam.y + height / 2 / cam.zoom, zoom: cam.zoom },
     legend: legend.map(({ name, color }) => ({ name, color })),
     cells: layer.toJSON(),
+    vectors,
   };
 }
 
@@ -772,7 +869,7 @@ async function exportProject() {
     if (downloads) {
       try {
         await downloads.save({ filename, data });
-        toast(`已导出 ${filename}（${project.cells.length} 个格子）`);
+        toast(`已导出 ${filename}（${project.cells.length} 个格子，${project.vectors.length} 个平滑图形）`);
       } catch (err) {
         const code = (err as { code?: string })?.code;
         if (code === "declined") return;
@@ -790,11 +887,12 @@ async function exportProject() {
   a.click();
   a.remove();
   setTimeout(() => URL.revokeObjectURL(url), 1000);
-  toast(`已导出 ${filename}（${project.cells.length} 个格子）`);
+  toast(`已导出 ${filename}（${project.cells.length} 个格子，${project.vectors.length} 个平滑图形）`);
 }
 
 function loadProject(p: ProjectFile) {
   layer.load(p.cells);
+  vectors = p.vectors;
   if (p.legend.length) {
     legend = p.legend.map((e) => ({ ...e, id: nextId++ }));
     saveLegend();
@@ -809,7 +907,7 @@ function loadProject(p: ProjectFile) {
   undoStack.length = 0;
   redoStack.length = 0;
   afterEdit();
-  toast(`已导入「${nameInput.value}」（${p.cells.length} 个格子）`);
+  toast(`已导入「${nameInput.value}」（${p.cells.length} 个格子，${p.vectors.length} 个平滑图形）`);
 }
 
 const fileInput = $("file-import") as HTMLInputElement;
@@ -839,6 +937,7 @@ window.addEventListener("keydown", (e) => {
   else if (e.key === "o" || e.key === "O") { e.preventDefault(); fileInput.click(); }
 });
 
+setSmooth(smooth);
 setTool("brush");
 renderLegend();
 selectEntry(selectedId);

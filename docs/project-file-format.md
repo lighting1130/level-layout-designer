@@ -5,7 +5,7 @@
 ```json
 {
   "format": "level-layout-designer",
-  "version": 1,
+  "version": 2,
   "name": "第一关 森林",
   "exportedAt": "2026-11-20T09:40:00.000Z",
   "grid": { "cellSize": 32, "subdivision": 10 },
@@ -15,6 +15,12 @@
   ],
   "cells": [
     { "k": 0, "i": 3, "j": -2, "color": "#8b93a3" }
+  ],
+  "vectors": [
+    {
+      "kind": "arc", "a": { "x": 0, "y": 0 }, "b": { "x": 320, "y": 0 }, "bend": { "x": 160, "y": -96 },
+      "constrain": false, "color": "#f2c14e", "width": 16, "fill": false
+    }
   ]
 }
 ```
@@ -28,5 +34,8 @@
 | `view` | 导出时屏幕中心的世界坐标和缩放，导入后恢复到这个视角 |
 | `legend` | 右侧“颜色说明”面板的内容，按顺序 |
 | `cells` | 涂色的格子，后面的覆盖前面的 |
+| `vectors` | 平滑模式画的弧线和图形（版本 2 新增，画在格子之上） |
 
 格子坐标：层级 `k` 的格子边长为 `cellSize × subdivision^k`（`k = 0` 是基础格子，`k = -1` 是 1/10 格，`k = 1` 是 10×10 格），`(i, j)` 是它在该层级中的列号和行号，左上角世界坐标为 `(i × 边长, j × 边长)`。换算成基础格子坐标：`x = i × 10^k`，`y = j × 10^k`。
+
+平滑图形：`kind` 为 `arc`、`line`、`rect`、`ellipse`、`triangle`、`diamond`、`hexagon` 之一；`a`、`b` 是世界坐标下的起点和终点（图形为外接框的两个对角），`bend` 是弧线经过的控制点（弧线为过 `a`、`bend`、`b` 三点的圆弧），`constrain` 表示按住 Shift 画的正图形，`width` 是世界坐标下的线宽（基础格子边长为 32），`fill` 表示是否填充内部。版本 1 的工程文件没有 `vectors`，仍可正常导入。

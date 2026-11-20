@@ -26,6 +26,10 @@
           <label class="check" title="勾选后内部也填满颜色"><input id="shape-fill" type="checkbox" /> 填充</label>
         </span>
         <span id="stroke-options" class="group stroke" hidden title="弧线和图形的线条粗细，单位是当前笔刷格子（[ 和 ] 键调整）">
+          <span class="seg" role="group" aria-label="绘制模式">
+            <button id="mode-cells" title="按格子逐格填色">格子</button>
+            <button id="mode-smooth" title="平滑的矢量线条，放大也顺滑">平滑</button>
+          </span>
           <span>粗细</span>
           <button id="stroke-dec" aria-label="变细">−</button>
           <input id="stroke-width" type="number" min="1" max="99" step="1" value="1" aria-label="线条粗细（格）" />

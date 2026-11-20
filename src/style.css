@@ -77,6 +77,11 @@ select {
 }
 .stroke input:focus { outline: none; border-color: #7aa2f7; }
 .stroke button { min-width: 26px; padding: 0; }
+.seg { display: inline-flex; margin-right: 6px; }
+.seg button { padding: 0 10px; border-radius: 0; }
+.seg button:first-child { border-radius: 5px 0 0 5px; }
+.seg button:last-child { border-radius: 0 5px 5px 0; border-left: 0; }
+.seg button[aria-pressed="true"] { background: #3d5a99; border-color: #7aa2f7; color: #fff; }
 .check { display: inline-flex; align-items: center; gap: 4px; cursor: pointer; padding: 0 4px; }
 .hint {
   position: fixed; left: 50%; top: 64px; transform: translateX(-50%); padding: 5px 12px; border-radius: 6px;

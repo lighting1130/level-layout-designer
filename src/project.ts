@@ -1,8 +1,10 @@
 import type { Cell } from "./cells";
+import { sanitizeVectors, type VectorShape } from "./vectors";
 
 /** 工程文件格式（.json）。字段说明见 docs/project-file-format.md */
 export const PROJECT_FORMAT = "level-layout-designer";
-export const PROJECT_VERSION = 1;
+/** 版本 2 新增 vectors（平滑图形）；版本 1 的文件仍可导入 */
+export const PROJECT_VERSION = 2;
 
 export interface ProjectFile {
   format: typeof PROJECT_FORMAT;
@@ -13,6 +15,7 @@ export interface ProjectFile {
   view: { x: number; y: number; zoom: number };
   legend: { name: string; color: string }[];
   cells: Cell[];
+  vectors: VectorShape[];
 }
 
 const HEX = /^#[0-9a-f]{6}$/i;
@@ -51,6 +54,7 @@ export function parseProject(text: string): ProjectFile {
     view,
     legend,
     cells,
+    vectors: sanitizeVectors(data.vectors),
   };
 }
 
