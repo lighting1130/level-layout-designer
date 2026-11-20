@@ -25,9 +25,12 @@
           "kind": "arc", "a": { "x": 0, "y": 0 }, "b": { "x": 320, "y": 0 }, "bend": { "x": 160, "y": -96 },
           "constrain": false, "color": "#f2c14e", "width": 16, "fill": false
         }
+      ],
+      "notes": [
+        { "x": 96, "y": -64, "text": "这里放 Boss，二阶段会开门" }
       ]
     },
-    { "level": -1, "cells": [], "vectors": [] }
+    { "level": -1, "cells": [], "vectors": [], "notes": [] }
   ]
 }
 ```
@@ -45,6 +48,7 @@
 | `floors[].level` | 楼层号：1 = 第一层，2 = 第二层，-1 = 负一层……没有 0 |
 | `floors[].cells` | 该层涂色的格子，后面的覆盖前面的 |
 | `floors[].vectors` | 该层平滑模式画的弧线和图形，画在格子之上 |
+| `floors[].notes` | 该层的文字备注（可选）：`{ "x", "y", "text" }`，`x`/`y` 是备注钉子的世界坐标（单位同 `vectors`） |
 
 格子坐标：层级 `k` 的格子边长为 `cellSize × subdivision^k`（`k = 0` 是基础格子，`k = -1` 是 1/10 格，`k = 1` 是 10×10 格），`(i, j)` 是它在该层级中的列号和行号，左上角世界坐标为 `(i × 边长, j × 边长)`。换算成基础格子坐标：`x = i × 10^k`，`y = j × 10^k`。
 

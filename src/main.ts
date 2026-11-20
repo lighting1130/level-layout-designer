@@ -3,6 +3,7 @@ import { CELL_SIZE, SUBDIVISION, brushLevel, drawBackground, drawGrid, finestLev
 import { CellLayer, type Cell, type Change } from "./cells";
 import { MAX_SHAPE_CELLS, SHAPE_LABELS, TooManyCellsError, arcPoints, rasterizeFill, rasterizeThickStroke, clampSides, shapePolygon, type CellIJ, type Pt, type ShapeKind } from "./shapes";
 import { drawVector, drawVectors, hitVector, isClosed, moveVector, vectorBounds, sanitizeVectors, type VectorShape } from "./vectors";
+import { drawNotes, type Note, type NoteBox } from "./notes";
 import { PROJECT_FORMAT, PROJECT_VERSION, floorName, parseProject, projectFileName, sanitizeFloors, type FloorData, type ProjectFile } from "./project";
 
 const canvas = document.getElementById("canvas") as HTMLCanvasElement;
@@ -184,7 +185,7 @@ function hslToHex(h: number, s: number, l: number): string {
 }
 
 // ---------------- 工具 ----------------
-type Tool = "select" | "brush" | "eraser" | "arc" | "shape" | "hand";
+type Tool = "select" | "brush" | "eraser" | "arc" | "shape" | "note" | "hand";
 let tool: Tool = "brush";
 let spaceDown = false;
 
@@ -287,20 +288,22 @@ $("stroke-inc").addEventListener("click", () => strokeStep(1));
 
 // ---------------- 撤销 / 重做 ----------------
 /** 一步撤销：格子的修改记录 + （若有改动）修改前的平滑图形列表 */
-interface Entry { floor: number; cells: Change; vectors?: VectorShape[] }
+interface Entry { floor: number; cells: Change; vectors?: VectorShape[]; notes?: Note[] }
 const undoStack: Entry[] = [];
 const redoStack: Entry[] = [];
 /** 当前楼层的平滑图形（画在格子和网格之上）；切换楼层时与 floors 同步 */
 let vectors: VectorShape[] = [];
 
 // ---------------- 楼层 ----------------
-interface Floor { level: number; layer: CellLayer; vectors: VectorShape[] }
+/** 当前楼层的备注；与 vectors 一样在切换楼层时同步 */
+let notes: Note[] = [];
+interface Floor { level: number; layer: CellLayer; vectors: VectorShape[]; notes: Note[] }
 /** 按楼层号从高到低排列 */
-let floors: Floor[] = [{ level: 1, layer, vectors }];
+let floors: Floor[] = [{ level: 1, layer, vectors, notes }];
 let currentLevel = 1;
 const currentFloor = () => floors.find((f) => f.level === currentLevel)!;
 /** 把当前楼层的 vectors 写回楼层对象 */
-function syncFloor() { currentFloor().vectors = vectors; }
+function syncFloor() { currentFloor().vectors = vectors; currentFloor().notes = notes; }
 
 function switchFloor(level: number) {
   if (!floors.some((f) => f.level === level)) return;
@@ -308,10 +311,12 @@ function switchFloor(level: number) {
   endStroke();
   cancelDraft();
   clearSelection();
+  if (editing) closeNoteEditor();
   syncFloor();
   currentLevel = level;
   layer = currentFloor().layer;
   vectors = currentFloor().vectors;
+  notes = currentFloor().notes;
   renderFloors();
   save();
   requestRender();
@@ -322,7 +327,7 @@ function addFloor(dir: 1 | -1) {
   const levels = floors.map((f) => f.level);
   let level = dir > 0 ? Math.max(...levels) + 1 : Math.min(...levels) - 1;
   if (level === 0) level = dir;
-  floors.push({ level, layer: new CellLayer(), vectors: [] });
+  floors.push({ level, layer: new CellLayer(), vectors: [], notes: [] });
   floors.sort((a, b) => b.level - a.level);
   switchFloor(level);
   renderFloors();
@@ -352,6 +357,7 @@ function deleteCurrentFloor(btn: HTMLButtonElement) {
   currentLevel = next.level;
   layer = next.layer;
   vectors = next.vectors;
+  notes = next.notes;
   renderFloors();
   afterEdit();
   toast(`已删除${floorName(removed)}`);
@@ -373,7 +379,7 @@ function renderFloors() {
     const b = document.createElement("button");
     b.className = "floor-row";
     b.setAttribute("aria-pressed", String(f.level === currentLevel));
-    const count = f.layer.size + (f.level === currentLevel ? vectors.length : f.vectors.length);
+    const count = f.layer.size + (f.level === currentLevel ? vectors.length + notes.length : f.vectors.length + f.notes.length);
     const name = document.createElement("span");
     name.textContent = floorName(f.level);
     const meta = document.createElement("span");
@@ -401,9 +407,9 @@ function stepFloor(dir: 1 | -1) {
 const btnUndo = $("btn-undo") as HTMLButtonElement;
 const btnRedo = $("btn-redo") as HTMLButtonElement;
 
-function commit(change: Change, vectorsBefore?: VectorShape[]) {
-  if (change.size === 0 && !vectorsBefore) return;
-  undoStack.push({ floor: currentLevel, cells: change, vectors: vectorsBefore });
+function commit(change: Change, vectorsBefore?: VectorShape[], notesBefore?: Note[]) {
+  if (change.size === 0 && !vectorsBefore && !notesBefore) return;
+  undoStack.push({ floor: currentLevel, cells: change, vectors: vectorsBefore, notes: notesBefore });
   if (undoStack.length > 200) undoStack.shift();
   redoStack.length = 0;
   afterEdit();
@@ -422,10 +428,12 @@ function redo() {
 }
 function applyEntry(e: Entry): Entry {
   clearSelection();
+  if (editing) closeNoteEditor();
   // 撤销/重做发生在别的楼层时，先切换过去，让用户看到变化
   if (e.floor !== currentLevel) switchFloor(e.floor);
   const inv: Entry = { floor: e.floor, cells: layer.apply(e.cells) };
   if (e.vectors) { inv.vectors = vectors; vectors = e.vectors; }
+  if (e.notes) { inv.notes = notes; notes = e.notes; }
   return inv;
 }
 function afterEdit() {
@@ -441,8 +449,10 @@ $("btn-clear").addEventListener("click", () => {
   const ch: Change = new Map();
   layer.clear(ch);
   const before = vectors.length ? vectors : undefined;
+  const notesBefore = notes.length ? notes : undefined;
   vectors = [];
-  commit(ch, before);
+  notes = [];
+  commit(ch, before, notesBefore);
 });
 
 // ---------------- 本地保存（刷新页面不丢） ----------------
@@ -451,18 +461,19 @@ const VECTOR_KEY = "level-layout-designer.vectors.v1";
 const FLOORS_KEY = "level-layout-designer.floors.v1";
 function floorData(): FloorData[] {
   syncFloor();
-  return floors.map((f) => ({ level: f.level, cells: f.layer.toJSON(), vectors: f.vectors }));
+  return floors.map((f) => ({ level: f.level, cells: f.layer.toJSON(), vectors: f.vectors, notes: f.notes }));
 }
 function loadFloors(data: FloorData[], current: number) {
   floors = sanitizeFloors(data).map((f) => {
     const l = new CellLayer();
     l.load(f.cells);
-    return { level: f.level, layer: l, vectors: f.vectors };
+    return { level: f.level, layer: l, vectors: f.vectors, notes: f.notes };
   });
   const cur = floors.find((f) => f.level === current) ?? floors.find((f) => f.level === 1) ?? floors[0];
   currentLevel = cur.level;
   layer = cur.layer;
   vectors = cur.vectors;
+  notes = cur.notes;
 }
 let saveTimer = 0;
 function flushSave() {
@@ -487,7 +498,7 @@ try {
     // 旧版本只有一层：迁移为第一层
     const raw = localStorage.getItem(STORAGE_KEY);
     const rawV = localStorage.getItem(VECTOR_KEY);
-    loadFloors([{ level: 1, cells: raw ? JSON.parse(raw) : [], vectors: rawV ? sanitizeVectors(JSON.parse(rawV)) : [] }], 1);
+    loadFloors([{ level: 1, cells: raw ? JSON.parse(raw) : [], vectors: rawV ? sanitizeVectors(JSON.parse(rawV)) : [], notes: [] }], 1);
   }
 } catch { /* 忽略损坏或不可用的存储 */ }
 
@@ -528,6 +539,10 @@ function drawHover() {
     ctx.strokeStyle = "#ffffff";
     ctx.lineWidth = 1.5;
     ctx.stroke();
+    return;
+  }
+  if (tool === "note") {
+    canvas.style.cursor = hover && noteAt(hover.x, hover.y) ? "pointer" : "copy";
     return;
   }
   if (tool === "select") {
@@ -574,6 +589,9 @@ function frame() {
     for (const f of others) drawVectors(ctx, cam, f.vectors, floorAlpha(f.level));
     drawVectors(ctx, cam, hiddenVec ? vectors.filter((v) => !hiddenVec.has(v)) : vectors);
     drawDraft();
+    for (const f of others) drawNotes(ctx, cam, f.notes, floorAlpha(f.level));
+    const hiddenNotes = moveDrag && selection ? new Set(selection.notes) : undefined;
+    noteBoxes = drawNotes(ctx, cam, hiddenNotes ? notes.filter((n) => !hiddenNotes.has(n)) : notes, 1, selection ? new Set(selection.notes) : undefined);
     drawSelection();
     drawHover();
     currentSwatch.style.background = currentColor;
@@ -814,10 +832,83 @@ function draftHint(): string {
     if (draft.phase === "pickEnd" || draft.phase === "drag") return "弧线：选择终点";
     return "弧线：移动鼠标调整弯曲，点击确认（Esc 取消）";
   }
+  if (tool === "note") return "备注：点击空白处添加，点击已有备注编辑（任何工具下双击备注也可编辑）";
   if (tool === "select") return selection ? "拖动选区移动 · 方向键微调 · Delete 删除 · Esc 取消" : "框选：拖出一个框选中内容（Ctrl+A 全选当前层）";
   if (tool === "shape") return draft ? "松开生成；按住 Shift 画正图形" : "图形：从一个角拖到对角";
   return "";
 }
+
+// ---------------- 备注 ----------------
+/** 本帧当前楼层备注在屏幕上的位置，用于点击命中 */
+let noteBoxes: NoteBox[] = [];
+function noteAt(sx: number, sy: number): Note | null {
+  for (let n = noteBoxes.length - 1; n >= 0; n--) {
+    const b = noteBoxes[n];
+    if (sx >= b.x0 && sx <= b.x1 && sy >= b.y0 && sy <= b.y1) return b.note;
+  }
+  return null;
+}
+
+const noteEditor = $("note-editor");
+const noteText = $("note-text") as HTMLTextAreaElement;
+let editing: { note: Note | null; at: Pt } | null = null;
+
+/** 打开备注编辑框：note 为 null 表示在 at 处新建 */
+function openNoteEditor(note: Note | null, at?: Pt) {
+  const pos = note ? { x: note.x, y: note.y } : at!;
+  editing = { note, at: pos };
+  noteText.value = note?.text ?? "";
+  ($("note-delete") as HTMLButtonElement).hidden = !note;
+  const p = cam.worldToScreen(pos.x, pos.y);
+  noteEditor.hidden = false;
+  const w = noteEditor.offsetWidth, h = noteEditor.offsetHeight;
+  noteEditor.style.left = `${Math.max(8, Math.min(window.innerWidth - w - 8, p.x + 12))}px`;
+  noteEditor.style.top = `${Math.max(8, Math.min(window.innerHeight - h - 8, p.y + 12))}px`;
+  noteText.focus();
+  requestRender();
+}
+
+function closeNoteEditor() {
+  editing = null;
+  noteEditor.hidden = true;
+  requestRender();
+}
+
+function saveNote() {
+  if (!editing) return;
+  const text = noteText.value.trim();
+  const before = notes;
+  if (editing.note) {
+    if (!text) notes = notes.filter((n) => n !== editing!.note);
+    else if (text !== editing.note.text) notes = notes.map((n) => (n === editing!.note ? { ...n, text } : n));
+  } else if (text) {
+    notes = [...notes, { x: editing.at.x, y: editing.at.y, text }];
+  }
+  if (notes !== before) commit(new Map(), undefined, before);
+  closeNoteEditor();
+}
+
+function deleteNote() {
+  if (!editing?.note) return closeNoteEditor();
+  const before = notes;
+  notes = notes.filter((n) => n !== editing!.note);
+  commit(new Map(), undefined, before);
+  closeNoteEditor();
+}
+
+$("note-save").addEventListener("click", saveNote);
+$("note-cancel").addEventListener("click", closeNoteEditor);
+$("note-delete").addEventListener("click", deleteNote);
+noteText.addEventListener("keydown", (e) => {
+  if (e.key === "Escape") { e.preventDefault(); closeNoteEditor(); }
+  else if (e.key === "Enter" && (e.ctrlKey || e.metaKey)) { e.preventDefault(); saveNote(); }
+});
+// 任何工具下双击备注都可以编辑
+canvas.addEventListener("dblclick", (e) => {
+  const p = localPoint(e);
+  const hit = noteAt(p.x, p.y);
+  if (hit) openNoteEditor(hit);
+});
 
 // ---------------- 框选与移动 ----------------
 /**
@@ -828,6 +919,7 @@ function draftHint(): string {
 interface Selection {
   cells: Cell[];
   vectors: VectorShape[];
+  notes: Note[];
   box: { x0: number; y0: number; x1: number; y1: number };
   /** 移动的最小步长（世界坐标） */
   step: number;
@@ -840,8 +932,8 @@ function clearSelection() {
   if (selection || marquee) { selection = null; marquee = null; moveDrag = null; requestRender(); }
 }
 
-function makeSelection(cells: Cell[], vecs: VectorShape[]): Selection | null {
-  if (!cells.length && !vecs.length) return null;
+function makeSelection(cells: Cell[], vecs: VectorShape[], ns: Note[] = []): Selection | null {
+  if (!cells.length && !vecs.length && !ns.length) return null;
   let x0 = Infinity, y0 = Infinity, x1 = -Infinity, y1 = -Infinity;
   let step = levelStep(brushLevel(cam.zoom));
   for (const c of cells) {
@@ -854,19 +946,23 @@ function makeSelection(cells: Cell[], vecs: VectorShape[]): Selection | null {
     const b = vectorBounds(v);
     x0 = Math.min(x0, b.x0); y0 = Math.min(y0, b.y0); x1 = Math.max(x1, b.x1); y1 = Math.max(y1, b.y1);
   }
-  return { cells, vectors: vecs, box: { x0, y0, x1, y1 }, step };
+  for (const n of ns) {
+    x0 = Math.min(x0, n.x); y0 = Math.min(y0, n.y); x1 = Math.max(x1, n.x); y1 = Math.max(y1, n.y);
+  }
+  return { cells, vectors: vecs, notes: ns, box: { x0, y0, x1, y1 }, step };
 }
 
 function selectInRect(a: Pt, b: Pt) {
   const x0 = Math.min(a.x, b.x), y0 = Math.min(a.y, b.y), x1 = Math.max(a.x, b.x), y1 = Math.max(a.y, b.y);
   const cells = layer.cellsInRect(x0, y0, x1, y1);
   const vecs = vectors.filter((v) => { const r = vectorBounds(v); return r.x0 >= x0 && r.y0 >= y0 && r.x1 <= x1 && r.y1 <= y1; });
-  selection = makeSelection(cells, vecs);
+  const ns = notes.filter((n) => n.x >= x0 && n.x <= x1 && n.y >= y0 && n.y <= y1);
+  selection = makeSelection(cells, vecs, ns);
 }
 
 function selectAll() {
   setTool("select");
-  selection = makeSelection(layer.cellsInRect(-Infinity, -Infinity, Infinity, Infinity), [...vectors]);
+  selection = makeSelection(layer.cellsInRect(-Infinity, -Infinity, Infinity, Infinity), [...vectors], [...notes]);
   requestRender();
 }
 
@@ -890,8 +986,16 @@ function moveSelection(dx: number, dy: number) {
     movedVecs = selection.vectors.map((v) => moveVector(v, dx, dy));
     vectors = vectors.filter((v) => !set.has(v)).concat(movedVecs);
   }
-  commit(change, before);
-  selection = makeSelection(moved, movedVecs);
+  let notesBefore: Note[] | undefined;
+  let movedNotes = selection.notes;
+  if (selection.notes.length) {
+    notesBefore = notes;
+    const set = new Set(selection.notes);
+    movedNotes = selection.notes.map((n) => ({ ...n, x: n.x + dx, y: n.y + dy }));
+    notes = notes.filter((n) => !set.has(n)).concat(movedNotes);
+  }
+  commit(change, before, notesBefore);
+  selection = makeSelection(moved, movedVecs, movedNotes);
   if (selection) selection.step = Math.max(selection.step, levelStep(brushLevel(cam.zoom)));
   requestRender();
 }
@@ -906,8 +1010,14 @@ function deleteSelection() {
     const set = new Set(selection.vectors);
     vectors = vectors.filter((v) => !set.has(v));
   }
-  commit(change, before);
-  const n = selection.cells.length + selection.vectors.length;
+  let notesBefore: Note[] | undefined;
+  if (selection.notes.length) {
+    notesBefore = notes;
+    const set = new Set(selection.notes);
+    notes = notes.filter((n) => !set.has(n));
+  }
+  commit(change, before, notesBefore);
+  const n = selection.cells.length + selection.vectors.length + selection.notes.length;
   selection = null;
   toast(`已删除 ${n} 项`);
 }
@@ -944,6 +1054,7 @@ function drawSelection() {
       ctx.fillRect(x - 0.5, y - 0.5, Math.max(1, w), Math.max(1, h));
     }
     for (const v of selection.vectors) drawVector(ctx, cam, moveVector(v, dx, dy));
+    drawNotes(ctx, cam, selection.notes.map((n) => ({ ...n, x: n.x + dx, y: n.y + dy })));
   }
   const b = selection.box;
   const [x, y, w, h] = rectScreen(b.x0 + dx, b.y0 + dy, b.x1 + dx, b.y1 + dy);
@@ -979,6 +1090,10 @@ canvas.addEventListener("pointerdown", (e) => {
   if (wantsPan) {
     mode = "pan";
     canvas.classList.add("panning");
+  } else if (e.button === 0 && tool === "note") {
+    const hit = noteAt(p.x, p.y);
+    if (hit) openNoteEditor(hit);
+    else openNoteEditor(null, cam.screenToWorld(p.x, p.y));
   } else if (e.button === 0 && tool === "select") {
     const w = cam.screenToWorld(p.x, p.y);
     if (selection && inSelection(w)) {
@@ -1057,7 +1172,7 @@ function endPointer(e: PointerEvent) {
   if (pointers.size === 0 && mode === "marquee" && marquee) {
     selectInRect(marquee.a, marquee.b);
     marquee = null;
-    if (selection) toast(`已选中 ${selection.cells.length + selection.vectors.length} 项：拖动移动，Delete 删除`);
+    if (selection) toast(`已选中 ${selection.cells.length + selection.vectors.length + selection.notes.length} 项：拖动移动，Delete 删除`);
   } else if (pointers.size === 0 && mode === "move" && moveDrag) {
     const { dx, dy } = moveDrag;
     moveDrag = null;
@@ -1128,7 +1243,7 @@ function zoomCenter(factor: number) {
   requestRender();
 }
 window.addEventListener("keydown", (e) => {
-  if (e.target instanceof HTMLInputElement) return;
+  if (e.target instanceof HTMLInputElement || e.target instanceof HTMLTextAreaElement || e.target instanceof HTMLSelectElement) return;
   const mod = e.ctrlKey || e.metaKey;
   if (mod && (e.key === "z" || e.key === "Z")) { e.preventDefault(); e.shiftKey ? redo() : undo(); return; }
   if (mod && (e.key === "y" || e.key === "Y")) { e.preventDefault(); redo(); return; }
@@ -1149,6 +1264,7 @@ window.addEventListener("keydown", (e) => {
     return;
   }
   if (e.key === "v" || e.key === "V") { setTool("select"); return; }
+  if (e.key === "n" || e.key === "N") { setTool("note"); return; }
   if (e.key === "Enter" && draft && draft.phase === "bend") { commitDraft(); return; }
   if (e.key === "PageUp") { e.preventDefault(); stepFloor(1); return; }
   if (e.key === "PageDown") { e.preventDefault(); stepFloor(-1); return; }

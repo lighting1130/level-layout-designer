@@ -1,5 +1,6 @@
 import type { Cell } from "./cells";
 import { sanitizeVectors, type VectorShape } from "./vectors";
+import { sanitizeNotes, type Note } from "./notes";
 
 /** 工程文件格式（.json）。字段说明见 docs/project-file-format.md */
 export const PROJECT_FORMAT = "level-layout-designer";
@@ -14,6 +15,8 @@ export interface FloorData {
   level: number;
   cells: Cell[];
   vectors: VectorShape[];
+  /** 备注（可选，旧文件没有） */
+  notes: Note[];
 }
 
 export interface ProjectFile {
@@ -46,10 +49,10 @@ export function sanitizeFloors(list: unknown): FloorData[] {
     for (const f of list as any[]) {
       if (!f || !Number.isInteger(f.level) || f.level === 0 || seen.has(f.level)) continue;
       seen.add(f.level);
-      out.push({ level: f.level, cells: sanitizeCells(f.cells), vectors: sanitizeVectors(f.vectors) });
+      out.push({ level: f.level, cells: sanitizeCells(f.cells), vectors: sanitizeVectors(f.vectors), notes: sanitizeNotes(f.notes) });
     }
   }
-  if (!out.length) out.push({ level: 1, cells: [], vectors: [] });
+  if (!out.length) out.push({ level: 1, cells: [], vectors: [], notes: [] });
   return out.sort((a, b) => b.level - a.level);
 }
 
@@ -75,7 +78,7 @@ export function parseProject(text: string): ProjectFile {
     : { x: 0, y: 0, zoom: 1 };
   const floors = Array.isArray(data.floors)
     ? sanitizeFloors(data.floors)
-    : sanitizeFloors([{ level: 1, cells: data.cells, vectors: data.vectors }]);
+    : sanitizeFloors([{ level: 1, cells: data.cells, vectors: data.vectors, notes: [] }]);
   const currentFloor = floors.some((f) => f.level === data.currentFloor) ? data.currentFloor : floors.find((f) => f.level === 1)?.level ?? floors[0].level;
   return {
     format: PROJECT_FORMAT,
