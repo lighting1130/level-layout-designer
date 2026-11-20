@@ -1,8 +1,9 @@
 /** 二维相机：世界坐标 <-> 屏幕坐标（CSS 像素）。screen = (world - pos) * zoom */
 export interface Vec2 { x: number; y: number }
 
-export const MIN_ZOOM = 0.02;
-export const MAX_ZOOM = 40;
+/** 缩放范围很大，网格可无限细分/合并；上限只受浮点精度约束 */
+export const MIN_ZOOM = 1e-6;
+export const MAX_ZOOM = 1e9;
 
 export class Camera {
   /** 屏幕左上角对应的世界坐标 */

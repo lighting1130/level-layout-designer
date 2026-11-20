@@ -1,5 +1,5 @@
 import { Camera } from "./camera";
-import { CELL_SIZE, drawGrid } from "./grid";
+import { CELL_SIZE, drawGrid, finestLevel } from "./grid";
 
 const canvas = document.getElementById("canvas") as HTMLCanvasElement;
 const ctx = canvas.getContext("2d")!;
@@ -35,15 +35,26 @@ function frame() {
   if (dirty) {
     dirty = false;
     drawGrid(ctx, cam, width, height);
-    hudZoom.textContent = `${Math.round(cam.zoom * 100)}%`;
+    hudZoom.textContent = formatZoom(cam.zoom);
   }
   requestAnimationFrame(frame);
 }
 
-// ---- 鼠标位置 -> 格子坐标 ----
+function formatZoom(z: number): string {
+  const pct = z * 100;
+  if (pct >= 1e5 || pct < 0.01) return `${pct.toExponential(1)}%`;
+  return `${pct >= 10 ? Math.round(pct) : Number(pct.toPrecision(2))}%`;
+}
+
+// ---- 鼠标位置 -> 格子坐标（放大细分后显示小数，精度跟随当前最细一级网格） ----
 function updateCursorCell(sx: number, sy: number) {
   const w = cam.screenToWorld(sx, sy);
-  hudCell.textContent = `格子: ${Math.floor(w.x / CELL_SIZE)}, ${Math.floor(w.y / CELL_SIZE)}`;
+  const decimals = Math.min(12, Math.max(0, -finestLevel(cam.zoom)));
+  const f = (v: number) => {
+    const scale = Math.pow(10, decimals);
+    return (Math.floor((v / CELL_SIZE) * scale) / scale).toFixed(decimals);
+  };
+  hudCell.textContent = `格子: ${f(w.x)}, ${f(w.y)}`;
 }
 
 // ---- 平移（指针拖拽）与双指缩放 ----
