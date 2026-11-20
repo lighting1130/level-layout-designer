@@ -542,11 +542,11 @@ function drawHover() {
     return;
   }
   if (tool === "note") {
-    canvas.style.cursor = hover && noteAt(hover.x, hover.y) ? "pointer" : "copy";
+    canvas.style.cursor = noteDrag?.moved ? "grabbing" : hover && noteAt(hover.x, hover.y) ? "grab" : "copy";
     return;
   }
   if (tool === "select") {
-    canvas.style.cursor = mode === "move" ? "grabbing" : hover && selection && inSelection(cam.screenToWorld(hover.x, hover.y)) ? "move" : "default";
+    canvas.style.cursor = mode === "move" || noteDrag?.moved ? "grabbing" : hover && ((selection && inSelection(cam.screenToWorld(hover.x, hover.y))) || noteAt(hover.x, hover.y)) ? "move" : "default";
     return;
   }
   canvas.style.cursor = "";
@@ -591,7 +591,16 @@ function frame() {
     drawDraft();
     for (const f of others) drawNotes(ctx, cam, f.notes, floorAlpha(f.level));
     const hiddenNotes = moveDrag && selection ? new Set(selection.notes) : undefined;
-    noteBoxes = drawNotes(ctx, cam, hiddenNotes ? notes.filter((n) => !hiddenNotes.has(n)) : notes, 1, selection ? new Set(selection.notes) : undefined);
+    let shown = hiddenNotes ? notes.filter((n) => !hiddenNotes.has(n)) : notes;
+    let hl = selection ? new Set(selection.notes) : undefined;
+    if (noteDrag?.moved) {
+      // 拖动中的备注画在新位置，并高亮
+      const d = noteDrag;
+      const ghost = { ...d.note, x: d.note.x + d.dx, y: d.note.y + d.dy };
+      shown = shown.map((n) => (n === d.note ? ghost : n));
+      hl = new Set([...(hl ?? []), ghost]);
+    }
+    noteBoxes = drawNotes(ctx, cam, shown, 1, hl);
     drawSelection();
     drawHover();
     currentSwatch.style.background = currentColor;
@@ -634,7 +643,7 @@ function updateCursorCell(sx: number, sy: number) {
 }
 
 // ---------------- 指针：涂色 / 平移 / 双指缩放 ----------------
-type Mode = "none" | "paint" | "draw" | "pan" | "pinch" | "marquee" | "move";
+type Mode = "none" | "paint" | "draw" | "pan" | "pinch" | "marquee" | "move" | "noteDrag";
 let mode: Mode = "none";
 const pointers = new Map<number, { x: number; y: number }>();
 let pinchDist = 0;
@@ -832,7 +841,7 @@ function draftHint(): string {
     if (draft.phase === "pickEnd" || draft.phase === "drag") return "弧线：选择终点";
     return "弧线：移动鼠标调整弯曲，点击确认（Esc 取消）";
   }
-  if (tool === "note") return "备注：点击空白处添加，点击已有备注编辑（任何工具下双击备注也可编辑）";
+  if (tool === "note") return "备注：点击空白处添加，点击备注编辑，按住备注拖动可移动位置";
   if (tool === "select") return selection ? "拖动选区移动 · 方向键微调 · Delete 删除 · Esc 取消" : "框选：拖出一个框选中内容（Ctrl+A 全选当前层）";
   if (tool === "shape") return draft ? "松开生成；按住 Shift 画正图形" : "图形：从一个角拖到对角";
   return "";
@@ -872,6 +881,8 @@ function openNoteEditor(note: Note | null, at?: Pt) {
 
 function closeNoteEditor() {
   editing = null;
+  // 让快捷键（撤销等）立刻回到画布
+  if (document.activeElement === noteText) noteText.blur();
   noteEditor.hidden = true;
   requestRender();
 }
@@ -934,6 +945,31 @@ interface Selection {
 let selection: Selection | null = null;
 let marquee: { a: Pt; b: Pt } | null = null;
 let moveDrag: { start: Pt; dx: number; dy: number } | null = null;
+/** 正在拖动的单条备注：按下时记录起点，移动超过几像素才算拖动，否则当作点击 */
+let noteDrag: { note: Note; start: Pt; startScreen: Pt; dx: number; dy: number; moved: boolean } | null = null;
+
+function beginNoteDrag(note: Note, p: Pt) {
+  mode = "noteDrag";
+  noteDrag = { note, start: cam.screenToWorld(p.x, p.y), startScreen: p, dx: 0, dy: 0, moved: false };
+}
+
+/** 松开备注：拖动过就移动并记入撤销；只是点了一下则编辑（备注工具）或选中（框选工具） */
+function endNoteDrag() {
+  if (!noteDrag) return;
+  const { note, dx, dy, moved } = noteDrag;
+  noteDrag = null;
+  if (moved && (dx || dy)) {
+    const before = notes;
+    const movedNote = { ...note, x: note.x + dx, y: note.y + dy };
+    notes = notes.map((n) => (n === note ? movedNote : n));
+    commit(new Map(), undefined, before);
+    if (tool === "select") selection = makeSelection([], [], [movedNote]);
+  } else if (tool === "note") {
+    openNoteEditor(note);
+  } else if (tool === "select") {
+    selection = makeSelection([], [], [note]);
+  }
+}
 
 function clearSelection() {
   if (selection || marquee) { selection = null; marquee = null; moveDrag = null; requestRender(); }
@@ -1084,6 +1120,7 @@ canvas.addEventListener("pointerdown", (e) => {
 
   if (pointers.size === 2) {
     if (mode === "draw") cancelDraft();
+    noteDrag = null;
     // 第二根手指落下：取消当前笔画（已画部分保留且可撤销），改为双指平移缩放
     endStroke();
     mode = "pinch";
@@ -1099,14 +1136,19 @@ canvas.addEventListener("pointerdown", (e) => {
     canvas.classList.add("panning");
   } else if (e.button === 0 && tool === "note") {
     e.preventDefault();
+    if (editing) closeNoteEditor();
     const hit = noteAt(p.x, p.y);
-    if (hit) openNoteEditor(hit);
+    if (hit) beginNoteDrag(hit, p);
     else openNoteEditor(null, cam.screenToWorld(p.x, p.y));
   } else if (e.button === 0 && tool === "select") {
     const w = cam.screenToWorld(p.x, p.y);
+    const hitNote = noteAt(p.x, p.y);
     if (selection && inSelection(w)) {
       mode = "move";
       moveDrag = { start: w, dx: 0, dy: 0 };
+    } else if (hitNote) {
+      selection = null;
+      beginNoteDrag(hitNote, p);
     } else {
       mode = "marquee";
       selection = null;
@@ -1157,6 +1199,13 @@ canvas.addEventListener("pointermove", (e) => {
     const st = selection.step;
     moveDrag.dx = Math.round((w.x - moveDrag.start.x) / st) * st;
     moveDrag.dy = Math.round((w.y - moveDrag.start.y) / st) * st;
+  } else if (mode === "noteDrag" && noteDrag) {
+    if (Math.hypot(p.x - noteDrag.startScreen.x, p.y - noteDrag.startScreen.y) > 3) noteDrag.moved = true;
+    if (noteDrag.moved) {
+      const w = cam.screenToWorld(p.x, p.y);
+      noteDrag.dx = w.x - noteDrag.start.x;
+      noteDrag.dy = w.y - noteDrag.start.y;
+    }
   } else if (mode === "pan") {
     cam.panBy(p.x - prev.x, p.y - prev.y);
   } else if (mode === "paint" && stroke) {
@@ -1181,6 +1230,8 @@ function endPointer(e: PointerEvent) {
     selectInRect(marquee.a, marquee.b);
     marquee = null;
     if (selection) toast(`已选中 ${selection.cells.length + selection.vectors.length + selection.notes.length} 项：拖动移动，Delete 删除`);
+  } else if (pointers.size === 0 && mode === "noteDrag") {
+    endNoteDrag();
   } else if (pointers.size === 0 && mode === "move" && moveDrag) {
     const { dx, dy } = moveDrag;
     moveDrag = null;
