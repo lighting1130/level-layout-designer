@@ -865,6 +865,8 @@ function openNoteEditor(note: Note | null, at?: Pt) {
   noteEditor.style.left = `${Math.max(8, Math.min(window.innerWidth - w - 8, p.x + 12))}px`;
   noteEditor.style.top = `${Math.max(8, Math.min(window.innerHeight - h - 8, p.y + 12))}px`;
   noteText.focus();
+  // 点击画布打开时，鼠标按下的默认行为会把焦点抢回页面，所以下一帧再聚焦一次
+  setTimeout(() => { if (editing) noteText.focus(); }, 0);
   requestRender();
 }
 
@@ -883,6 +885,11 @@ function saveNote() {
     else if (text !== editing.note.text) notes = notes.map((n) => (n === editing!.note ? { ...n, text } : n));
   } else if (text) {
     notes = [...notes, { x: editing.at.x, y: editing.at.y, text }];
+  } else {
+    // 新备注还没有内容：不要悄悄关掉，提示用户先写字
+    toast("备注还是空的，先写点文字再保存", true);
+    noteText.focus();
+    return;
   }
   if (notes !== before) commit(new Map(), undefined, before);
   closeNoteEditor();
@@ -1091,6 +1098,7 @@ canvas.addEventListener("pointerdown", (e) => {
     mode = "pan";
     canvas.classList.add("panning");
   } else if (e.button === 0 && tool === "note") {
+    e.preventDefault();
     const hit = noteAt(p.x, p.y);
     if (hit) openNoteEditor(hit);
     else openNoteEditor(null, cam.screenToWorld(p.x, p.y));
@@ -1244,6 +1252,12 @@ function zoomCenter(factor: number) {
 }
 window.addEventListener("keydown", (e) => {
   if (e.target instanceof HTMLInputElement || e.target instanceof HTMLTextAreaElement || e.target instanceof HTMLSelectElement) return;
+  // 备注编辑框开着时，按键都交给输入框，不触发工具快捷键
+  if (editing) {
+    if (e.key === "Escape") { e.preventDefault(); closeNoteEditor(); }
+    else noteText.focus();
+    return;
+  }
   const mod = e.ctrlKey || e.metaKey;
   if (mod && (e.key === "z" || e.key === "Z")) { e.preventDefault(); e.shiftKey ? redo() : undo(); return; }
   if (mod && (e.key === "y" || e.key === "Y")) { e.preventDefault(); redo(); return; }
@@ -1333,6 +1347,8 @@ function buildProject(): ProjectFile {
 
 type Saver = { save(r: { filename: string; data: string }): Promise<unknown> };
 async function exportProject() {
+  // 备注编辑框还开着、里面有字时，先把这条备注存下来，免得导出的文件里没有它
+  if (editing && noteText.value.trim()) saveNote();
   const project = buildProject();
   const filename = projectFileName(project.name);
   const data = JSON.stringify(project, null, 2);
@@ -1410,7 +1426,10 @@ window.addEventListener("drop", async (e) => {
 });
 window.addEventListener("keydown", (e) => {
   if (!(e.ctrlKey || e.metaKey)) return;
-  if (e.key === "s" || e.key === "S") { e.preventDefault(); void exportProject(); }
+  if (e.key === "s" || e.key === "S") {
+    e.preventDefault();
+    void exportProject();
+  }
   else if (e.key === "o" || e.key === "O") { e.preventDefault(); fileInput.click(); }
 });
 
