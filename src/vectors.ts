@@ -87,6 +87,22 @@ function outline(v: VectorShape): { pts: Pt[]; closed: boolean } {
   return shapePolygon(v.kind, v.a, v.b, v.constrain, v.sides);
 }
 
+/** 图形的外接框（含线宽） */
+export function vectorBounds(v: VectorShape) {
+  const { pts } = v.kind === "ellipse" ? { pts: [v.a, v.b] } : outline(v);
+  let x0 = Infinity, y0 = Infinity, x1 = -Infinity, y1 = -Infinity;
+  const all = v.kind === "ellipse" ? (() => { const b = shapeBox(v.a, v.b, v.constrain); return [{ x: b.x0, y: b.y0 }, { x: b.x0 + b.w, y: b.y0 + b.h }]; })() : pts;
+  for (const p of all) { x0 = Math.min(x0, p.x); y0 = Math.min(y0, p.y); x1 = Math.max(x1, p.x); y1 = Math.max(y1, p.y); }
+  const r = v.width / 2;
+  return { x0: x0 - r, y0: y0 - r, x1: x1 + r, y1: y1 + r };
+}
+
+/** 平移一个图形，返回新对象 */
+export function moveVector(v: VectorShape, dx: number, dy: number): VectorShape {
+  const m = (p: Pt) => ({ x: p.x + dx, y: p.y + dy });
+  return { ...v, a: m(v.a), b: m(v.b), bend: v.bend ? m(v.bend) : null };
+}
+
 /** 世界坐标点 (x, y) 是否碰到图形（线条附近 tol 范围内，或在填充区域内） */
 export function hitVector(v: VectorShape, x: number, y: number, tol: number): boolean {
   const { pts, closed } = outline(v);

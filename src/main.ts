@@ -1,8 +1,8 @@
 import { Camera } from "./camera";
 import { CELL_SIZE, SUBDIVISION, brushLevel, drawBackground, drawGrid, finestLevel, levelStep } from "./grid";
-import { CellLayer, type Change } from "./cells";
+import { CellLayer, type Cell, type Change } from "./cells";
 import { MAX_SHAPE_CELLS, SHAPE_LABELS, TooManyCellsError, arcPoints, rasterizeFill, rasterizeThickStroke, clampSides, shapePolygon, type CellIJ, type Pt, type ShapeKind } from "./shapes";
-import { drawVector, drawVectors, hitVector, isClosed, sanitizeVectors, type VectorShape } from "./vectors";
+import { drawVector, drawVectors, hitVector, isClosed, moveVector, vectorBounds, sanitizeVectors, type VectorShape } from "./vectors";
 import { PROJECT_FORMAT, PROJECT_VERSION, floorName, parseProject, projectFileName, sanitizeFloors, type FloorData, type ProjectFile } from "./project";
 
 const canvas = document.getElementById("canvas") as HTMLCanvasElement;
@@ -184,12 +184,12 @@ function hslToHex(h: number, s: number, l: number): string {
 }
 
 // ---------------- 工具 ----------------
-type Tool = "brush" | "eraser" | "arc" | "shape" | "hand";
+type Tool = "select" | "brush" | "eraser" | "arc" | "shape" | "hand";
 let tool: Tool = "brush";
 let spaceDown = false;
 
 function setTool(t: Tool) {
-  if (t !== tool) cancelDraft();
+  if (t !== tool) { cancelDraft(); if (t !== "select") clearSelection(); }
   tool = t;
   shapeOptions.hidden = t !== "shape";
   $("tool-options").hidden = t !== "shape" && t !== "arc";
@@ -307,6 +307,7 @@ function switchFloor(level: number) {
   if (level === currentLevel) return;
   endStroke();
   cancelDraft();
+  clearSelection();
   syncFloor();
   currentLevel = level;
   layer = currentFloor().layer;
@@ -341,6 +342,7 @@ function deleteCurrentFloor(btn: HTMLButtonElement) {
   }
   clearTimeout(deleteArmed);
   deleteArmed = 0;
+  clearSelection();
   const removed = currentLevel;
   floors = floors.filter((f) => f.level !== removed);
   for (const stack of [undoStack, redoStack]) {
@@ -419,6 +421,7 @@ function redo() {
   afterEdit();
 }
 function applyEntry(e: Entry): Entry {
+  clearSelection();
   // 撤销/重做发生在别的楼层时，先切换过去，让用户看到变化
   if (e.floor !== currentLevel) switchFloor(e.floor);
   const inv: Entry = { floor: e.floor, cells: layer.apply(e.cells) };
@@ -527,6 +530,11 @@ function drawHover() {
     ctx.stroke();
     return;
   }
+  if (tool === "select") {
+    canvas.style.cursor = mode === "move" ? "grabbing" : hover && selection && inSelection(cam.screenToWorld(hover.x, hover.y)) ? "move" : "default";
+    return;
+  }
+  canvas.style.cursor = "";
   if (!hover || draft || mode === "pan" || mode === "pinch" || tool === "hand" || spaceDown) return;
   const c = cellAt(hover.x, hover.y, activeLevel());
   const s = levelStep(c.k);
@@ -558,11 +566,15 @@ function frame() {
       f.layer.draw(ctx, cam, width, height);
     }
     ctx.globalAlpha = 1;
-    layer.draw(ctx, cam, width, height);
+    // 拖动选区时，原位置的内容先隐藏，只在新位置预览
+    const hidden = moveDrag && selection ? new Set(selection.cells.map(cellKey)) : undefined;
+    const hiddenVec = moveDrag && selection ? new Set(selection.vectors) : undefined;
+    layer.draw(ctx, cam, width, height, hidden);
     drawGrid(ctx, cam, width, height);
     for (const f of others) drawVectors(ctx, cam, f.vectors, floorAlpha(f.level));
-    drawVectors(ctx, cam, vectors);
+    drawVectors(ctx, cam, hiddenVec ? vectors.filter((v) => !hiddenVec.has(v)) : vectors);
     drawDraft();
+    drawSelection();
     drawHover();
     currentSwatch.style.background = currentColor;
     const hint = draftHint();
@@ -604,7 +616,7 @@ function updateCursorCell(sx: number, sy: number) {
 }
 
 // ---------------- 指针：涂色 / 平移 / 双指缩放 ----------------
-type Mode = "none" | "paint" | "draw" | "pan" | "pinch";
+type Mode = "none" | "paint" | "draw" | "pan" | "pinch" | "marquee" | "move";
 let mode: Mode = "none";
 const pointers = new Map<number, { x: number; y: number }>();
 let pinchDist = 0;
@@ -802,8 +814,148 @@ function draftHint(): string {
     if (draft.phase === "pickEnd" || draft.phase === "drag") return "弧线：选择终点";
     return "弧线：移动鼠标调整弯曲，点击确认（Esc 取消）";
   }
+  if (tool === "select") return selection ? "拖动选区移动 · 方向键微调 · Delete 删除 · Esc 取消" : "框选：拖出一个框选中内容（Ctrl+A 全选当前层）";
   if (tool === "shape") return draft ? "松开生成；按住 Shift 画正图形" : "图形：从一个角拖到对角";
   return "";
+}
+
+// ---------------- 框选与移动 ----------------
+/**
+ * 框选工具：在当前楼层拖出一个框，格子中心在框内的格子、完全在框内的平滑图形被选中。
+ * 在选区内按下拖动即可移动，移动距离对齐到格子（取选区中最粗一级格子的大小）。
+ * Delete 删除、方向键微调、Esc 取消、Ctrl+A 全选当前层。
+ */
+interface Selection {
+  cells: Cell[];
+  vectors: VectorShape[];
+  box: { x0: number; y0: number; x1: number; y1: number };
+  /** 移动的最小步长（世界坐标） */
+  step: number;
+}
+let selection: Selection | null = null;
+let marquee: { a: Pt; b: Pt } | null = null;
+let moveDrag: { start: Pt; dx: number; dy: number } | null = null;
+
+function clearSelection() {
+  if (selection || marquee) { selection = null; marquee = null; moveDrag = null; requestRender(); }
+}
+
+function makeSelection(cells: Cell[], vecs: VectorShape[]): Selection | null {
+  if (!cells.length && !vecs.length) return null;
+  let x0 = Infinity, y0 = Infinity, x1 = -Infinity, y1 = -Infinity;
+  let step = levelStep(brushLevel(cam.zoom));
+  for (const c of cells) {
+    const s = levelStep(c.k);
+    step = Math.max(step, s);
+    x0 = Math.min(x0, c.i * s); y0 = Math.min(y0, c.j * s);
+    x1 = Math.max(x1, (c.i + 1) * s); y1 = Math.max(y1, (c.j + 1) * s);
+  }
+  for (const v of vecs) {
+    const b = vectorBounds(v);
+    x0 = Math.min(x0, b.x0); y0 = Math.min(y0, b.y0); x1 = Math.max(x1, b.x1); y1 = Math.max(y1, b.y1);
+  }
+  return { cells, vectors: vecs, box: { x0, y0, x1, y1 }, step };
+}
+
+function selectInRect(a: Pt, b: Pt) {
+  const x0 = Math.min(a.x, b.x), y0 = Math.min(a.y, b.y), x1 = Math.max(a.x, b.x), y1 = Math.max(a.y, b.y);
+  const cells = layer.cellsInRect(x0, y0, x1, y1);
+  const vecs = vectors.filter((v) => { const r = vectorBounds(v); return r.x0 >= x0 && r.y0 >= y0 && r.x1 <= x1 && r.y1 <= y1; });
+  selection = makeSelection(cells, vecs);
+}
+
+function selectAll() {
+  setTool("select");
+  selection = makeSelection(layer.cellsInRect(-Infinity, -Infinity, Infinity, Infinity), [...vectors]);
+  requestRender();
+}
+
+const cellKey = (c: { k: number; i: number; j: number }) => `${c.k}:${c.i}:${c.j}`;
+
+/** 把选区移动 (dx, dy)（世界坐标，已对齐到步长），作为一步可撤销操作 */
+function moveSelection(dx: number, dy: number) {
+  if (!selection || (dx === 0 && dy === 0)) return;
+  const change: Change = new Map();
+  for (const c of selection.cells) layer.remove(c.k, c.i, c.j, change);
+  const moved = selection.cells.map((c) => {
+    const s = levelStep(c.k);
+    return { ...c, i: c.i + Math.round(dx / s), j: c.j + Math.round(dy / s) };
+  });
+  for (const c of moved) layer.paint(c.k, c.i, c.j, c.color, change);
+  let before: VectorShape[] | undefined;
+  let movedVecs = selection.vectors;
+  if (selection.vectors.length) {
+    before = vectors;
+    const set = new Set(selection.vectors);
+    movedVecs = selection.vectors.map((v) => moveVector(v, dx, dy));
+    vectors = vectors.filter((v) => !set.has(v)).concat(movedVecs);
+  }
+  commit(change, before);
+  selection = makeSelection(moved, movedVecs);
+  if (selection) selection.step = Math.max(selection.step, levelStep(brushLevel(cam.zoom)));
+  requestRender();
+}
+
+function deleteSelection() {
+  if (!selection) return;
+  const change: Change = new Map();
+  for (const c of selection.cells) layer.remove(c.k, c.i, c.j, change);
+  let before: VectorShape[] | undefined;
+  if (selection.vectors.length) {
+    before = vectors;
+    const set = new Set(selection.vectors);
+    vectors = vectors.filter((v) => !set.has(v));
+  }
+  commit(change, before);
+  const n = selection.cells.length + selection.vectors.length;
+  selection = null;
+  toast(`已删除 ${n} 项`);
+}
+
+function inSelection(w: Pt) {
+  if (!selection) return false;
+  const { x0, y0, x1, y1 } = selection.box;
+  return w.x >= x0 && w.x <= x1 && w.y >= y0 && w.y <= y1;
+}
+
+/** 选区预览：拖动中把选中内容画在新位置 */
+function drawSelection() {
+  const rectScreen = (x0: number, y0: number, x1: number, y1: number) => {
+    const p = cam.worldToScreen(x0, y0), q = cam.worldToScreen(x1, y1);
+    return [Math.round(p.x) + 0.5, Math.round(p.y) + 0.5, Math.round(q.x - p.x), Math.round(q.y - p.y)] as const;
+  };
+  if (marquee) {
+    const [x, y, w, h] = rectScreen(Math.min(marquee.a.x, marquee.b.x), Math.min(marquee.a.y, marquee.b.y), Math.max(marquee.a.x, marquee.b.x), Math.max(marquee.a.y, marquee.b.y));
+    ctx.fillStyle = "rgba(122,162,247,0.12)";
+    ctx.fillRect(x, y, w, h);
+    ctx.strokeStyle = "#7aa2f7";
+    ctx.lineWidth = 1;
+    ctx.setLineDash([4, 3]);
+    ctx.strokeRect(x, y, w, h);
+    ctx.setLineDash([]);
+  }
+  if (!selection) return;
+  const dx = moveDrag?.dx ?? 0, dy = moveDrag?.dy ?? 0;
+  if (moveDrag) {
+    for (const c of selection.cells) {
+      const s = levelStep(c.k);
+      const [x, y, w, h] = rectScreen(c.i * s + dx, c.j * s + dy, (c.i + 1) * s + dx, (c.j + 1) * s + dy);
+      ctx.fillStyle = c.color;
+      ctx.fillRect(x - 0.5, y - 0.5, Math.max(1, w), Math.max(1, h));
+    }
+    for (const v of selection.vectors) drawVector(ctx, cam, moveVector(v, dx, dy));
+  }
+  const b = selection.box;
+  const [x, y, w, h] = rectScreen(b.x0 + dx, b.y0 + dy, b.x1 + dx, b.y1 + dy);
+  ctx.strokeStyle = "#7aa2f7";
+  ctx.lineWidth = 1.5;
+  ctx.setLineDash([6, 4]);
+  ctx.strokeRect(x, y, w, h);
+  ctx.setLineDash([]);
+  for (const [hx, hy] of [[x, y], [x + w, y], [x, y + h], [x + w, y + h]]) {
+    ctx.fillStyle = "#7aa2f7";
+    ctx.fillRect(hx - 3, hy - 3, 6, 6);
+  }
 }
 
 canvas.addEventListener("pointerdown", (e) => {
@@ -827,6 +979,16 @@ canvas.addEventListener("pointerdown", (e) => {
   if (wantsPan) {
     mode = "pan";
     canvas.classList.add("panning");
+  } else if (e.button === 0 && tool === "select") {
+    const w = cam.screenToWorld(p.x, p.y);
+    if (selection && inSelection(w)) {
+      mode = "move";
+      moveDrag = { start: w, dx: 0, dy: 0 };
+    } else {
+      mode = "marquee";
+      selection = null;
+      marquee = { a: w, b: w };
+    }
   } else if (e.button === 0 && (tool === "arc" || tool === "shape")) {
     mode = "draw";
     const k = draft ? draft.k : brushLevel(cam.zoom);
@@ -865,7 +1027,14 @@ canvas.addEventListener("pointermove", (e) => {
   const prev = pointers.get(e.pointerId);
   if (!prev) { requestRender(); return; }
 
-  if (mode === "pan") {
+  if (mode === "marquee" && marquee) {
+    marquee.b = cam.screenToWorld(p.x, p.y);
+  } else if (mode === "move" && moveDrag && selection) {
+    const w = cam.screenToWorld(p.x, p.y);
+    const st = selection.step;
+    moveDrag.dx = Math.round((w.x - moveDrag.start.x) / st) * st;
+    moveDrag.dy = Math.round((w.y - moveDrag.start.y) / st) * st;
+  } else if (mode === "pan") {
     cam.panBy(p.x - prev.x, p.y - prev.y);
   } else if (mode === "paint" && stroke) {
     paintSegment(stroke.last, p);
@@ -885,6 +1054,15 @@ canvas.addEventListener("pointermove", (e) => {
 
 function endPointer(e: PointerEvent) {
   pointers.delete(e.pointerId);
+  if (pointers.size === 0 && mode === "marquee" && marquee) {
+    selectInRect(marquee.a, marquee.b);
+    marquee = null;
+    if (selection) toast(`已选中 ${selection.cells.length + selection.vectors.length} 项：拖动移动，Delete 删除`);
+  } else if (pointers.size === 0 && mode === "move" && moveDrag) {
+    const { dx, dy } = moveDrag;
+    moveDrag = null;
+    moveSelection(dx, dy);
+  }
   if (pointers.size === 0 && mode === "draw" && draft) {
     if (draft.kind !== "arc" || draft.phase === "bendDrag") {
       commitDraft();
@@ -954,13 +1132,23 @@ window.addEventListener("keydown", (e) => {
   const mod = e.ctrlKey || e.metaKey;
   if (mod && (e.key === "z" || e.key === "Z")) { e.preventDefault(); e.shiftKey ? redo() : undo(); return; }
   if (mod && (e.key === "y" || e.key === "Y")) { e.preventDefault(); redo(); return; }
+  if (mod && (e.key === "a" || e.key === "A")) { e.preventDefault(); selectAll(); return; }
   if (mod) return;
   if (e.key === " ") {
     e.preventDefault();
     if (!spaceDown) { spaceDown = true; canvas.classList.add("space"); requestRender(); }
     return;
   }
-  if (e.key === "Escape") { cancelDraft(); return; }
+  if (e.key === "Escape") { cancelDraft(); clearSelection(); return; }
+  if (selection && (e.key === "Delete" || e.key === "Backspace")) { e.preventDefault(); deleteSelection(); return; }
+  if (selection && e.key.startsWith("Arrow")) {
+    e.preventDefault();
+    const st = selection.step * (e.shiftKey ? 10 : 1);
+    const d = { ArrowLeft: [-st, 0], ArrowRight: [st, 0], ArrowUp: [0, -st], ArrowDown: [0, st] }[e.key];
+    if (d) moveSelection(d[0], d[1]);
+    return;
+  }
+  if (e.key === "v" || e.key === "V") { setTool("select"); return; }
   if (e.key === "Enter" && draft && draft.phase === "bend") { commitDraft(); return; }
   if (e.key === "PageUp") { e.preventDefault(); stepFloor(1); return; }
   if (e.key === "PageDown") { e.preventDefault(); stepFloor(-1); return; }
@@ -1063,6 +1251,7 @@ async function exportProject() {
 function loadProject(p: ProjectFile) {
   endStroke();
   cancelDraft();
+  clearSelection();
   loadFloors(p.floors, p.currentFloor);
   renderFloors();
   if (p.legend.length) {

@@ -81,10 +81,32 @@ export class CellLayer {
     }
   }
 
-  draw(ctx: CanvasRenderingContext2D, cam: Camera, width: number, height: number) {
+  /** 格子中心落在世界坐标矩形内的所有格子 */
+  cellsInRect(x0: number, y0: number, x1: number, y1: number): Cell[] {
+    const out: Cell[] = [];
+    for (const c of this.cells.values()) {
+      const s = levelStep(c.k);
+      const cx = (c.i + 0.5) * s, cy = (c.j + 0.5) * s;
+      if (cx >= x0 && cx <= x1 && cy >= y0 && cy <= y1) out.push({ ...c });
+    }
+    return out;
+  }
+
+  /** 删除一个指定的格子 */
+  remove(k: number, i: number, j: number, change: Change): boolean {
+    const id = key(k, i, j);
+    if (!this.cells.has(id)) return false;
+    this.record(change, id);
+    this.cells.delete(id);
+    return true;
+  }
+
+  /** skip：不画的格子（例如正在拖动的选区原位置） */
+  draw(ctx: CanvasRenderingContext2D, cam: Camera, width: number, height: number, skip?: Set<string>) {
     const right = cam.x + width / cam.zoom;
     const bottom = cam.y + height / cam.zoom;
-    for (const c of this.cells.values()) {
+    for (const [id, c] of this.cells) {
+      if (skip?.has(id)) continue;
       const s = levelStep(c.k);
       const x0 = c.i * s, y0 = c.j * s;
       if (x0 > right || y0 > bottom || x0 + s < cam.x || y0 + s < cam.y) continue; // 视口外不画
