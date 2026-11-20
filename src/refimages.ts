@@ -15,10 +15,19 @@ export interface RefImage {
   opacity: number;
   /** 锁定后点击和拖动会穿透它，方便在上面画画 */
   locked: boolean;
+  /** 绕图片中心顺时针旋转的角度（度），0 时省略 */
+  rot?: number;
 }
 
 export const DEFAULT_OPACITY = 0.5;
 const MAX_SIDE = 2048;
+
+/** 角度规范到 (-180, 180]，并去掉浮点误差 */
+export const normAngle = (deg: number) => {
+  let a = Math.round(((deg % 360) + 360) % 360 * 100) / 100;
+  if (a > 180) a -= 360;
+  return a === 0 ? 0 : a;
+};
 
 export const clampOpacity = (v: number) => Math.max(0.05, Math.min(1, v));
 
@@ -38,6 +47,7 @@ export function sanitizeRefImages(list: unknown, known?: (id: string) => boolean
       h: r.h,
       opacity: typeof r.opacity === "number" && isFinite(r.opacity) ? clampOpacity(r.opacity) : DEFAULT_OPACITY,
       locked: r.locked === true,
+      ...(typeof r.rot === "number" && isFinite(r.rot) && normAngle(r.rot) ? { rot: normAngle(r.rot) } : {}),
     });
   }
   return out;
@@ -95,25 +105,47 @@ export class ImageStore {
 export function drawRefImages(ctx: CanvasRenderingContext2D, cam: Camera, list: RefImage[], store: ImageStore, alpha = 1) {
   for (const r of list) {
     const img = store.get(r.id);
-    const p = cam.worldToScreen(r.x, r.y);
+    const c = cam.worldToScreen(r.x + r.w / 2, r.y + r.h / 2);
     const w = r.w * cam.zoom, h = r.h * cam.zoom;
+    ctx.save();
+    ctx.translate(c.x, c.y);
+    if (r.rot) ctx.rotate((r.rot * Math.PI) / 180);
     ctx.globalAlpha = alpha * r.opacity;
     if (img) {
       ctx.imageSmoothingEnabled = w < img.naturalWidth * 2;
-      ctx.drawImage(img, p.x, p.y, w, h);
+      ctx.drawImage(img, -w / 2, -h / 2, w, h);
     } else {
       ctx.fillStyle = "#3a3f4b";
-      ctx.fillRect(p.x, p.y, w, h);
+      ctx.fillRect(-w / 2, -h / 2, w, h);
     }
+    ctx.restore();
   }
   ctx.globalAlpha = 1;
   ctx.imageSmoothingEnabled = true;
 }
 
-/** 屏幕坐标下的参考图范围 */
-export function refImageRect(cam: Camera, r: RefImage) {
-  const p = cam.worldToScreen(r.x, r.y);
-  return { x0: p.x, y0: p.y, x1: p.x + r.w * cam.zoom, y1: p.y + r.h * cam.zoom };
+/** 世界坐标下参考图的四个角（左上、右上、右下、左下，已旋转） */
+export function refImageCorners(r: RefImage): { x: number; y: number }[] {
+  const cx = r.x + r.w / 2, cy = r.y + r.h / 2;
+  const t = ((r.rot ?? 0) * Math.PI) / 180, cos = Math.cos(t), sin = Math.sin(t);
+  return [[-1, -1], [1, -1], [1, 1], [-1, 1]].map(([sx, sy]) => {
+    const dx = (sx * r.w) / 2, dy = (sy * r.h) / 2;
+    return { x: cx + dx * cos - dy * sin, y: cy + dx * sin + dy * cos };
+  });
+}
+
+/** 旋转后的外接框（世界坐标） */
+export function refImageBounds(r: RefImage) {
+  const c = refImageCorners(r);
+  const xs = c.map((p) => p.x), ys = c.map((p) => p.y);
+  return { x0: Math.min(...xs), y0: Math.min(...ys), x1: Math.max(...xs), y1: Math.max(...ys) };
+}
+
+/** 世界坐标点转到图片自身的坐标（原点在图片中心，未旋转方向） */
+export function refImageLocal(r: RefImage, x: number, y: number) {
+  const t = (-(r.rot ?? 0) * Math.PI) / 180, cos = Math.cos(t), sin = Math.sin(t);
+  const dx = x - (r.x + r.w / 2), dy = y - (r.y + r.h / 2);
+  return { x: dx * cos - dy * sin, y: dx * sin + dy * cos };
 }
 
 /**

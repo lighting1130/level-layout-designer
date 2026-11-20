@@ -90,6 +90,7 @@ button:disabled { opacity: 0.4; cursor: default; }
 .icon-grid canvas, .icon-grid img { width: 24px; height: 24px; object-fit: contain; pointer-events: none; }
 #icon-rename { flex: 1; min-width: 0; }
 #icon-size { width: 44px; }
+#image-rot { width: 56px; }
 .image-options { width: 220px; box-sizing: border-box; }
 .image-options .opt-tip { font-size: 12px; opacity: 0.6; margin-left: auto; }
 .image-options input[type="range"] { flex: 1; min-width: 0; accent-color: #7aa2f7; }
@@ -189,3 +190,4 @@ select {
 .modal-box select { width: 100%; min-width: 0; }
 .modal-box .checks { display: flex; flex-wrap: wrap; gap: 6px 10px; }
 .modal-tip { margin: 0; font-size: 12px; opacity: 0.7; min-height: 1em; }
+.tool-options .opt-row strong { white-space: nowrap; }

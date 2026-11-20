@@ -3,9 +3,9 @@ import { captureStatic, getLang, setLang, t } from "./i18n";
 import { CELL_SIZE, SUBDIVISION, brushLevel, drawBackground, drawGrid, finestLevel, levelStep } from "./grid";
 import { CellLayer, type Cell, type Change } from "./cells";
 import { ARROW_LABELS, arrowHeads, isArrowMode, type ArrowMode, MAX_SHAPE_CELLS, SHAPE_LABELS, TooManyCellsError, arcPoints, rasterizeFill, rasterizeThickStroke, clampSides, shapePolygon, type CellIJ, type Pt, type ShapeKind } from "./shapes";
-import { drawVector, drawVectors, hitVector, isClosed, moveVector, vectorBounds, sanitizeVectors, type VectorShape } from "./vectors";
+import { drawVector, drawVectors, hitVector, isClosed, moveVector, rotQuarter, rotateVector, vectorBounds, sanitizeVectors, type VectorShape } from "./vectors";
 import { drawNotes, moveNoteLabel, moveNotePin, type Note, type NoteBox } from "./notes";
-import { DEFAULT_OPACITY, ImageStore, clampOpacity, drawRefImages, loadImageFile, refImageRect, type RefImage } from "./refimages";
+import { DEFAULT_OPACITY, ImageStore, clampOpacity, drawRefImages, loadImageFile, normAngle, refImageCorners, refImageLocal, type RefImage } from "./refimages";
 import { ICONS, customImageId, customKind, drawIconAt, drawIcons, hitIcon, isBuiltinIcon, sanitizeCustomIcons, type CustomIcon, type MapIcon } from "./icons";
 import { DEFAULT_EXPORT, canvasToPng, makeZip, renderExport, type ExportOptions } from "./exportimage";
 import { PROJECT_FORMAT, PROJECT_VERSION, floorName, parseProject, projectFileName, sanitizeFloors, sanitizeIconLabels, type FloorData, type ProjectFile } from "./project";
@@ -340,7 +340,7 @@ let images: RefImage[] = [];
 const imageStore = new ImageStore(requestRender);
 /** 框选工具下选中的参考图，以及正在拖动/缩放的参考图（放在这里声明，启动时加载楼层就会用到） */
 let imgSel: RefImage | null = null;
-let imgDrag: { img: RefImage; kind: "move" | "resize"; start: Pt; startScreen: Pt; dx: number; dy: number; moved: boolean } | null = null;
+let imgDrag: { img: RefImage; kind: "move" | "resize" | "rotate"; start: Pt; startScreen: Pt; dx: number; dy: number; moved: boolean; shift: boolean } | null = null;
 /** 当前楼层的关卡图标 */
 let icons: MapIcon[] = [];
 /** 用户导入的图标库（所有楼层共用） */
@@ -675,6 +675,7 @@ function drawHover() {
   }
   if (tool === "select") {
     canvas.style.cursor = mode === "move" || noteDrag?.moved || (imgDrag?.moved && imgDrag.kind === "move") ? "grabbing"
+      : imgDrag?.kind === "rotate" || (hover && imageHandleAt(hover.x, hover.y) === "rotate") ? "crosshair"
       : imgDrag?.kind === "resize" || (hover && imageHandleAt(hover.x, hover.y)) ? "nwse-resize"
       : hover && ((selection && inSelection(cam.screenToWorld(hover.x, hover.y))) || noteAt(hover.x, hover.y) || imageAt(hover.x, hover.y)) ? "move" : "default";
     return;
@@ -749,6 +750,7 @@ function frame() {
     hudBrush.textContent = t("笔刷: {size}", { size: formatCellSize(activeLevel()) });
     hudFloor.textContent = floorName(currentLevel);
     syncImagePanel();
+    selectPanel.hidden = !(selection && tool === "select" && !moveDrag);
   }
   requestAnimationFrame(frame);
 }
@@ -999,7 +1001,7 @@ function draftHint(): string {
     return t("弧线：移动鼠标调整弯曲，点击确认（Esc 取消）");
   }
   if (tool === "note") return t("备注：点击空白处添加，点击便签编辑；拖便签或拖圆点可分别移动，连线自动伸缩");
-  if (tool === "select") return selection ? t("拖动选区移动 · 方向键微调 · Delete 删除 · Esc 取消") : t("框选：拖出一个框选中内容（Ctrl+A 全选当前层）");
+  if (tool === "select") return selection ? t("拖动选区移动 · 方向键微调 · R 旋转 · Delete 删除 · Esc 取消") : t("框选：拖出一个框选中内容（Ctrl+A 全选当前层）");
   if (tool === "shape") return draft ? t("松开生成；按住 Shift 画正图形") : t("图形：从一个角拖到对角");
   return "";
 }
@@ -1108,6 +1110,8 @@ interface Selection {
   box: { x0: number; y0: number; x1: number; y1: number };
   /** 移动的最小步长（世界坐标） */
   step: number;
+  /** 旋转中心：第一次旋转时确定，之后连续旋转都绕同一点，转四次回到原位 */
+  pivot?: Pt;
 }
 let selection: Selection | null = null;
 let marquee: { a: Pt; b: Pt } | null = null;
@@ -1151,41 +1155,74 @@ function clearSelection() {
 }
 
 // ---------------- 参考图 ----------------
-/** 拖动中的参考图预览：移动，或按住右下角等比缩放 */
+/** 拖动中的参考图预览：移动、拖右下角等比缩放，或拖上方圆点旋转 */
 function draggedImage(d: NonNullable<typeof imgDrag>): RefImage {
-  if (d.kind === "move") return { ...d.img, x: d.img.x + d.dx, y: d.img.y + d.dy };
-  const ratio = d.img.h / d.img.w;
+  const r = d.img;
+  if (d.kind === "move") return { ...r, x: r.x + d.dx, y: r.y + d.dy };
+  const cx = r.x + r.w / 2, cy = r.y + r.h / 2;
+  if (d.kind === "rotate") {
+    const at = (p: Pt) => Math.atan2(p.y - cy, p.x - cx);
+    const now = { x: d.start.x + d.dx, y: d.start.y + d.dy };
+    let rot = (r.rot ?? 0) + ((at(now) - at(d.start)) * 180) / Math.PI;
+    rot = d.shift ? Math.round(rot / 15) * 15 : Math.round(rot);
+    return withRot(r, normAngle(rot));
+  }
+  // 缩放：在图片自身方向上算拖动距离，左上角保持不动
+  const t = ((r.rot ?? 0) * Math.PI) / 180, cos = Math.cos(t), sin = Math.sin(t);
+  const lx = d.dx * cos + d.dy * sin, ly = -d.dx * sin + d.dy * cos;
+  const ratio = r.h / r.w;
   const minW = 16 / cam.zoom;
-  const w = Math.max(minW, d.img.w + d.dx, (d.img.h + d.dy) / ratio);
-  return { ...d.img, w, h: w * ratio };
+  const w = Math.max(minW, r.w + lx, (r.h + ly) / ratio), h = w * ratio;
+  const tl = refImageCorners(r)[0];
+  const ncx = tl.x + (w / 2) * cos - (h / 2) * sin, ncy = tl.y + (w / 2) * sin + (h / 2) * cos;
+  return { ...r, x: ncx - w / 2, y: ncy - h / 2, w, h };
+}
+function withRot(r: RefImage, rot: number): RefImage {
+  const next: RefImage = { ...r, rot };
+  if (!rot) delete next.rot;
+  return next;
 }
 const HANDLE = 10;
-function imageHandleAt(sx: number, sy: number): boolean {
-  if (!imgSel || imgSel.locked) return false;
-  const r = refImageRect(cam, imgSel);
-  return Math.abs(sx - r.x1) <= HANDLE && Math.abs(sy - r.y1) <= HANDLE;
+const ROT_GAP = 26;
+/** 选中参考图的手柄在屏幕上的位置：右下角缩放，上边中点外侧旋转 */
+function imageHandles(img: RefImage) {
+  const c = refImageCorners(img).map((p) => cam.worldToScreen(p.x, p.y));
+  const ctr = cam.worldToScreen(img.x + img.w / 2, img.y + img.h / 2);
+  const top = { x: (c[0].x + c[1].x) / 2, y: (c[0].y + c[1].y) / 2 };
+  const len = Math.hypot(top.x - ctr.x, top.y - ctr.y) || 1;
+  const rot = { x: top.x + ((top.x - ctr.x) / len) * ROT_GAP, y: top.y + ((top.y - ctr.y) / len) * ROT_GAP };
+  return { corners: c, resize: c[2], top, rot };
+}
+function imageHandleAt(sx: number, sy: number): "resize" | "rotate" | null {
+  if (!imgSel || imgSel.locked) return null;
+  const h = imageHandles(imgSel);
+  if (Math.hypot(sx - h.rot.x, sy - h.rot.y) <= HANDLE) return "rotate";
+  if (Math.abs(sx - h.resize.x) <= HANDLE && Math.abs(sy - h.resize.y) <= HANDLE) return "resize";
+  return null;
 }
 /** 屏幕点下最上面的参考图；锁定的默认跳过 */
 function imageAt(sx: number, sy: number, includeLocked = false): RefImage | null {
+  const w = cam.screenToWorld(sx, sy);
   for (let n = images.length - 1; n >= 0; n--) {
     const img = images[n];
     if (img.locked && !includeLocked) continue;
-    const r = refImageRect(cam, img);
-    if (sx >= r.x0 && sx <= r.x1 && sy >= r.y0 && sy <= r.y1) return img;
+    const l = refImageLocal(img, w.x, w.y);
+    if (Math.abs(l.x) <= img.w / 2 && Math.abs(l.y) <= img.h / 2) return img;
   }
   return null;
 }
-function beginImageDrag(img: RefImage, kind: "move" | "resize", p: Pt) {
+function beginImageDrag(img: RefImage, kind: "move" | "resize" | "rotate", p: Pt) {
   mode = "imgDrag";
   selection = null;
   imgSel = img;
-  imgDrag = { img, kind, start: cam.screenToWorld(p.x, p.y), startScreen: p, dx: 0, dy: 0, moved: false };
+  imgDrag = { img, kind, start: cam.screenToWorld(p.x, p.y), startScreen: p, dx: 0, dy: 0, moved: false, shift: false };
 }
 function endImageDrag() {
   const d = imgDrag;
   imgDrag = null;
   if (!d || !d.moved || (!d.dx && !d.dy)) return;
   const next = draggedImage(d);
+  if (next.x === d.img.x && next.y === d.img.y && next.w === d.img.w && (next.rot ?? 0) === (d.img.rot ?? 0)) { requestRender(); return; }
   replaceImage(d.img, next);
 }
 /** 替换一张参考图（记入撤销） */
@@ -1207,18 +1244,35 @@ function deleteImage() {
 function drawImageSelection() {
   if (!imgSel || tool !== "select") return;
   const shown = imgDrag?.moved ? draggedImage(imgDrag) : imgSel;
-  const r = refImageRect(cam, shown);
+  const h = imageHandles(shown);
   ctx.save();
   ctx.strokeStyle = "#7aa2f7";
   ctx.lineWidth = 1.5;
   ctx.setLineDash(shown.locked ? [4, 4] : []);
-  ctx.strokeRect(r.x0, r.y0, r.x1 - r.x0, r.y1 - r.y0);
+  ctx.beginPath();
+  h.corners.forEach((p, n) => (n ? ctx.lineTo(p.x, p.y) : ctx.moveTo(p.x, p.y)));
+  ctx.closePath();
+  ctx.stroke();
   ctx.setLineDash([]);
   if (!shown.locked) {
+    ctx.beginPath();
+    ctx.moveTo(h.top.x, h.top.y);
+    ctx.lineTo(h.rot.x, h.rot.y);
+    ctx.stroke();
     ctx.fillStyle = "#7aa2f7";
-    ctx.fillRect(r.x1 - 5, r.y1 - 5, 10, 10);
     ctx.strokeStyle = "#1e2127";
-    ctx.strokeRect(r.x1 - 5, r.y1 - 5, 10, 10);
+    ctx.beginPath();
+    ctx.arc(h.rot.x, h.rot.y, 6, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.stroke();
+    ctx.fillStyle = "#7aa2f7";
+    ctx.fillRect(h.resize.x - 5, h.resize.y - 5, 10, 10);
+    ctx.strokeRect(h.resize.x - 5, h.resize.y - 5, 10, 10);
+  }
+  if (imgDrag?.moved && imgDrag.kind === "rotate") {
+    ctx.font = "12px system-ui, sans-serif";
+    ctx.fillStyle = "#d7dae0";
+    ctx.fillText(`${shown.rot ?? 0}°`, h.rot.x + 12, h.rot.y - 8);
   }
   ctx.restore();
 }
@@ -1247,6 +1301,9 @@ async function importImageFile(file: Blob, at?: Pt) {
 }
 
 const imagePanel = $("image-options");
+const selectPanel = $("select-options");
+$("sel-rot-ccw").addEventListener("click", () => rotateSelection(-1));
+$("sel-rot-cw").addEventListener("click", () => rotateSelection(1));
 const imageOpacity = $("image-opacity") as HTMLInputElement;
 const imageOpacityText = $("image-opacity-text");
 const imageLock = $("image-lock") as HTMLInputElement;
@@ -1260,6 +1317,7 @@ function syncImagePanel() {
   if (document.activeElement !== imageOpacity) imageOpacity.value = String(pct);
   imageOpacityText.textContent = `${pct}%`;
   imageLock.checked = imgSel.locked;
+  if (document.activeElement !== imageRot) imageRot.value = String(imgSel.rot ?? 0);
 }
 imageOpacity.addEventListener("input", () => {
   if (!imgSel) return;
@@ -1283,6 +1341,17 @@ imageLock.addEventListener("change", () => {
   if (locked) toast(t("已锁定：点击会穿透这张图。要再调整，用框选工具双击图片"));
 });
 $("image-delete").addEventListener("click", deleteImage);
+const imageRot = $("image-rot") as HTMLInputElement;
+function setImageRot(deg: number) {
+  if (!imgSel || !isFinite(deg)) return;
+  const rot = normAngle(Math.round(deg * 10) / 10);
+  if (rot === (imgSel.rot ?? 0)) { syncImagePanel(); return; }
+  replaceImage(imgSel, withRot(imgSel, rot));
+}
+imageRot.addEventListener("change", () => setImageRot(Number(imageRot.value)));
+imageRot.addEventListener("keydown", (e) => { if (e.key === "Enter" || e.key === "Escape") imageRot.blur(); });
+$("image-rot-ccw").addEventListener("click", () => imgSel && setImageRot((imgSel.rot ?? 0) - 90));
+$("image-rot-cw").addEventListener("click", () => imgSel && setImageRot((imgSel.rot ?? 0) + 90));
 $("image-front").addEventListener("click", () => {
   if (!imgSel) return;
   const before = images;
@@ -1577,8 +1646,68 @@ function moveSelection(dx: number, dy: number) {
     icons = icons.filter((ic) => !set.has(ic)).concat(movedIcons);
   }
   commit(change, before, notesBefore, undefined, iconsBefore);
+  const pivot = selection.pivot;
   selection = makeSelection(moved, movedVecs, movedNotes, movedIcons);
   if (selection) selection.step = Math.max(selection.step, levelStep(brushLevel(cam.zoom)));
+  if (selection && pivot) selection.pivot = { x: pivot.x + dx, y: pivot.y + dy };
+  requestRender();
+}
+
+/**
+ * 把选区绕中心顺时针旋转 q 个 90°（q 为负则逆时针），可撤销。
+ * 旋转中心对齐到格子，保证格子转完仍然落在格子上；图标和备注文字保持正向，只转位置。
+ */
+function rotateSelection(q: number) {
+  if (!selection) return;
+  const s = selection.step;
+  const b = selection.box;
+  const half = s / 2;
+  let cx: number, cy: number;
+  const onGrid = (p: Pt) => [p.x / half, p.y / half, (p.x + p.y) / s].every((v) => Math.abs(v - Math.round(v)) < 1e-6);
+  if (selection.pivot && onGrid(selection.pivot)) ({ x: cx, y: cy } = selection.pivot);
+  else {
+    cx = Math.round((b.x0 + b.x1) / 2 / half) * half;
+    cy = Math.round((b.y0 + b.y1) / 2 / half) * half;
+    // 中心坐标之和必须是格子大小的整数倍，否则转完的格子会错开半格
+    const k = (cx + cy) / s;
+    if (Math.abs(k - Math.round(k)) > 1e-6) cy += half;
+  }
+  const R = (p: Pt) => rotQuarter(p, cx, cy, q);
+  const change: Change = new Map();
+  for (const c of selection.cells) layer.remove(c.k, c.i, c.j, change);
+  const rotated = selection.cells.map((c) => {
+    const sc = levelStep(c.k);
+    const m = R({ x: (c.i + 0.5) * sc, y: (c.j + 0.5) * sc });
+    return { ...c, i: Math.round(m.x / sc - 0.5), j: Math.round(m.y / sc - 0.5) };
+  });
+  for (const c of rotated) layer.paint(c.k, c.i, c.j, c.color, change);
+  let before: VectorShape[] | undefined;
+  let vecs = selection.vectors;
+  if (vecs.length) {
+    before = vectors;
+    const set = new Set(vecs);
+    vecs = vecs.map((v) => rotateVector(v, cx, cy, q));
+    vectors = vectors.filter((v) => !set.has(v)).concat(vecs);
+  }
+  let notesBefore: Note[] | undefined;
+  let ns = selection.notes;
+  if (ns.length) {
+    notesBefore = notes;
+    const set = new Set(ns);
+    ns = ns.map((n) => ({ ...n, ...R(n) }));
+    notes = notes.filter((n) => !set.has(n)).concat(ns);
+  }
+  let iconsBefore: MapIcon[] | undefined;
+  let ics = selection.icons;
+  if (ics.length) {
+    iconsBefore = icons;
+    const set = new Set(ics);
+    ics = ics.map((ic) => ({ ...ic, ...R(ic) }));
+    icons = icons.filter((ic) => !set.has(ic)).concat(ics);
+  }
+  commit(change, before, notesBefore, undefined, iconsBefore);
+  selection = makeSelection(rotated, vecs, ns, ics);
+  if (selection) { selection.step = Math.max(s, selection.step); selection.pivot = { x: cx, y: cy }; }
   requestRender();
 }
 
@@ -1601,8 +1730,9 @@ function recolorSelection(color: string, name: string) {
   if (!change.size && !before) return;
   const step = selection.step;
   commit(change, before);
+  const pivot = selection.pivot;
   selection = makeSelection(cells, vecs, selection.notes, selection.icons);
-  if (selection) selection.step = step;
+  if (selection) { selection.step = step; selection.pivot = pivot; }
   toast(t("已把选中的 {n} 项改成「{name}」", { n: cells.length + vecs.length, name: t(name) }));
 }
 
@@ -1724,7 +1854,7 @@ canvas.addEventListener("pointerdown", (e) => {
       imgSel = null;
       beginNoteDrag(hitNote, p);
     } else if (imageHandleAt(p.x, p.y)) {
-      beginImageDrag(imgSel!, "resize", p);
+      beginImageDrag(imgSel!, imageHandleAt(p.x, p.y)!, p);
     } else if (imageAt(p.x, p.y)) {
       beginImageDrag(imageAt(p.x, p.y)!, "move", p);
     } else {
@@ -1784,6 +1914,7 @@ canvas.addEventListener("pointermove", (e) => {
       const w = cam.screenToWorld(p.x, p.y);
       imgDrag.dx = w.x - imgDrag.start.x;
       imgDrag.dy = w.y - imgDrag.start.y;
+      imgDrag.shift = e.shiftKey;
     }
   } else if (mode === "noteDrag" && noteDrag) {
     if (Math.hypot(p.x - noteDrag.startScreen.x, p.y - noteDrag.startScreen.y) > 3) noteDrag.moved = true;
@@ -1912,6 +2043,13 @@ window.addEventListener("keydown", (e) => {
   if (e.key === "Escape") { cancelDraft(); clearSelection(); return; }
   if (imgSel && tool === "select" && (e.key === "Delete" || e.key === "Backspace")) { e.preventDefault(); deleteImage(); return; }
   if (selection && (e.key === "Delete" || e.key === "Backspace")) { e.preventDefault(); deleteSelection(); return; }
+  if ((e.key === "r" || e.key === "R") && tool === "select" && (selection || imgSel)) {
+    e.preventDefault();
+    const q = e.shiftKey ? -1 : 1;
+    if (selection) rotateSelection(q);
+    else if (imgSel && !imgSel.locked) setImageRot((imgSel.rot ?? 0) + 90 * q);
+    return;
+  }
   if (selection && e.key.startsWith("Arrow")) {
     e.preventDefault();
     const st = selection.step * (e.shiftKey ? 10 : 1);
