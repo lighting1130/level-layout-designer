@@ -1,0 +1,17 @@
+html, body { margin: 0; height: 100%; overflow: hidden; background: #1e2127; }
+body { font: 13px/1.4 system-ui, -apple-system, "PingFang SC", "Microsoft YaHei", sans-serif; color: #d7dae0; }
+#canvas { display: block; width: 100vw; height: 100vh; touch-action: none; cursor: grab; }
+#canvas.panning { cursor: grabbing; }
+.hud {
+  position: fixed; right: 12px; bottom: 12px; display: flex; gap: 6px; align-items: center;
+  padding: 6px 8px; background: rgba(30, 33, 39, 0.9); border: 1px solid #3a3f4b; border-radius: 8px;
+  user-select: none;
+}
+.hud span { padding: 0 6px; font-variant-numeric: tabular-nums; }
+#hud-zoom { min-width: 48px; text-align: center; }
+.hud button {
+  min-width: 28px; height: 26px; padding: 0 8px; color: inherit; background: #2c313a;
+  border: 1px solid #3a3f4b; border-radius: 5px; cursor: pointer; font: inherit;
+}
+.hud button:hover { background: #3a3f4b; }
+.help { position: fixed; left: 12px; bottom: 12px; opacity: 0.6; user-select: none; pointer-events: none; }

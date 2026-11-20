@@ -1,0 +1,21 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>关卡 Layout 设计器</title>
+    <link rel="stylesheet" href="/src/style.css" />
+  </head>
+  <body>
+    <canvas id="canvas"></canvas>
+    <div class="hud">
+      <span id="hud-cell">格子: 0, 0</span>
+      <span id="hud-zoom">100%</span>
+      <button id="btn-zoom-out" title="缩小 (-)">−</button>
+      <button id="btn-zoom-in" title="放大 (+)">+</button>
+      <button id="btn-reset" title="回到原点 (0)">复位</button>
+    </div>
+    <div class="help">拖拽平移 · 滚轮/双指缩放 · 0 复位</div>
+    <script type="module" src="/src/main.ts"></script>
+  </body>
+</html>
