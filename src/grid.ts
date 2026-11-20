@@ -42,10 +42,18 @@ export function levelStep(k: number): number {
  * 同时绘制 3 个相邻层级（细、中、粗），每级透明度随屏幕间距变化：
  * 放大时更细的格子逐渐浮现，缩小时细格子逐渐消失，没有尽头。
  */
-export function drawGrid(ctx: CanvasRenderingContext2D, cam: Camera, width: number, height: number): void {
+export function drawBackground(ctx: CanvasRenderingContext2D, width: number, height: number): void {
   ctx.fillStyle = BACKGROUND;
   ctx.fillRect(0, 0, width, height);
+}
 
+/** 画笔使用的格子层级：屏幕上至少 BRUSH_MIN_PX 大的最细一级，所以"看到多大的格子就画多大的格子" */
+const BRUSH_MIN_PX = 16;
+export function brushLevel(zoom: number): number {
+  return Math.ceil(Math.log(BRUSH_MIN_PX / (CELL_SIZE * zoom)) / Math.log(SUBDIVISION) - 1e-9);
+}
+
+export function drawGrid(ctx: CanvasRenderingContext2D, cam: Camera, width: number, height: number): void {
   const left = cam.x;
   const top = cam.y;
   const right = cam.x + width / cam.zoom;

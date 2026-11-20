@@ -8,14 +8,33 @@
   </head>
   <body>
     <canvas id="canvas"></canvas>
+    <div class="toolbar" id="toolbar">
+      <div class="group" role="group" aria-label="工具">
+        <button id="tool-brush" class="tool" data-tool="brush" title="画笔 (B)">画笔</button>
+        <button id="tool-eraser" class="tool" data-tool="eraser" title="橡皮 (E)">橡皮</button>
+        <button id="tool-hand" class="tool" data-tool="hand" title="平移 (H，或按住空格拖拽)">平移</button>
+      </div>
+      <div class="sep"></div>
+      <div class="group palette" id="palette" role="group" aria-label="调色板"></div>
+      <label class="custom" title="自定义颜色">
+        <input id="color-custom" type="color" value="#ff8800" />
+      </label>
+      <div class="sep"></div>
+      <div class="group">
+        <button id="btn-undo" title="撤销 (Ctrl+Z)">撤销</button>
+        <button id="btn-redo" title="重做 (Ctrl+Shift+Z)">重做</button>
+        <button id="btn-clear" title="清空画布（可撤销）">清空</button>
+      </div>
+    </div>
     <div class="hud">
+      <span id="hud-brush">笔刷: 1 格</span>
       <span id="hud-cell">格子: 0, 0</span>
       <span id="hud-zoom">100%</span>
       <button id="btn-zoom-out" title="缩小 (-)">−</button>
       <button id="btn-zoom-in" title="放大 (+)">+</button>
       <button id="btn-reset" title="回到原点 (0)">复位</button>
     </div>
-    <div class="help">拖拽平移 · 滚轮/双指缩放 · 0 复位</div>
+    <div class="help">左键涂色 · 空格/右键/中键拖拽平移 · 滚轮缩放（放大后笔刷自动变细） · 1-9 选色</div>
     <script type="module" src="/src/main.ts"></script>
   </body>
 </html>
