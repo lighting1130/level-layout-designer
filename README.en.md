@@ -14,11 +14,15 @@ A layout drawing tool for game level design. It helps level designers sketch, it
 
 **Nothing to install. Open the page and start drawing:**
 
-👉 **[Open Level Layout Designer](https://claude.ai/artifact/DDRPnUQsS3sF98zEyHz8RZ)**
+👉 **[Open Level Layout Designer](https://lighting1130.github.io/level-layout-designer/)** (GitHub Pages)
+
+Backup link: [online version on claude.ai](https://claude.ai/artifact/DDRPnUQsS3sF98zEyHz8RZ)
 
 ![Overview](docs/images/overview-en.png)
 
-> By default only the author can open this link. To let teammates use it, the author opens the **Share** menu at the top right of the page and grants them access (or makes it viewable by anyone with the link).
+> Anyone can open the GitHub Pages link. Every merge to `main` republishes it automatically; refresh after a few minutes to get the latest version.
+>
+> The backup claude.ai link is private to the author by default. To let others use it, the author grants access from the **Share** menu at the top right of that page.
 
 The interface opens in Chinese or English depending on your browser language. Switch any time with the **EN / 中文** button at the right end of the top toolbar.
 
@@ -84,7 +88,7 @@ npm run build          # type check + production build into dist/
 npm run build:single   # also bundle into one file: release/level-layout-designer.html
 ```
 
-After changing the code, run `npm run build:single` and commit the new `release/level-layout-designer.html` to update the offline version (the online link is republished separately).
+After changing the code, run `npm run build:single` and commit the new `release/level-layout-designer.html` to update the offline version. GitHub Pages updates automatically after a merge to `main` (the claude.ai link is republished separately).
 
 ## Tech stack
 

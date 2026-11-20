@@ -14,11 +14,15 @@
 
 **不用安装任何东西，打开网页就能画：**
 
-👉 **[打开关卡 Layout 设计器](https://claude.ai/artifact/DDRPnUQsS3sF98zEyHz8RZ)**
+👉 **[打开关卡 Layout 设计器](https://lighting1130.github.io/level-layout-designer/)**（GitHub Pages）
+
+备用链接：[claude.ai 上的在线版](https://claude.ai/artifact/DDRPnUQsS3sF98zEyHz8RZ)
 
 ![界面总览](docs/images/overview.png)
 
-> 这个在线链接默认只有作者本人能打开。要给团队成员用，请作者在网页右上角的「Share / 分享」菜单里把访问权限开给他们（或开成“有链接的人都能看”）。
+> GitHub Pages 的链接任何人都能直接打开。每次有新代码合并到 main，GitHub 会自动重新发布，几分钟后刷新网页就是最新版。
+>
+> 备用的 claude.ai 链接默认只有作者本人能打开，要给别人用需要在网页右上角的「Share / 分享」菜单里开放权限。
 
 ### 离线使用（不需要网络）
 
@@ -84,7 +88,7 @@ npm run build    # 类型检查 + 生产构建到 dist/
 npm run build:single   # 再打包成一个独立文件 release/level-layout-designer.html
 ```
 
-改完代码后运行 `npm run build:single`，把新的 `release/level-layout-designer.html` 一起提交，离线版就会更新（在线链接需要另外重新发布）。
+改完代码后运行 `npm run build:single`，把新的 `release/level-layout-designer.html` 一起提交，离线版就会更新；合并到 main 后 GitHub Pages 会自动更新（claude.ai 链接需要另外重新发布）。
 
 ## 技术栈
 
