@@ -1,14 +1,16 @@
 import type { Cell } from "./cells";
 import { sanitizeVectors, type VectorShape } from "./vectors";
 import { sanitizeNotes, type Note } from "./notes";
+import { isImageDataUrl, sanitizeRefImages, type RefImage } from "./refimages";
 
 /** 工程文件格式（.json）。字段说明见 docs/project-file-format.md */
 export const PROJECT_FORMAT = "level-layout-designer";
 /**
  * 版本 3：内容按楼层保存在 floors 中。
+ * 版本 4：新增参考图（顶层 images 存图片数据，floors[].images 存位置）。
  * 版本 1/2 的文件（顶层 cells / vectors）导入时视为“第一层”。
  */
-export const PROJECT_VERSION = 3;
+export const PROJECT_VERSION = 4;
 
 export interface FloorData {
   /** 楼层号：1 = 第一层，2 = 第二层，-1 = 负一层……没有 0 */
@@ -17,6 +19,8 @@ export interface FloorData {
   vectors: VectorShape[];
   /** 备注（可选，旧文件没有） */
   notes: Note[];
+  /** 参考图的位置和设置（可选，旧文件没有） */
+  images: RefImage[];
 }
 
 export interface ProjectFile {
@@ -29,6 +33,8 @@ export interface ProjectFile {
   legend: { name: string; color: string }[];
   currentFloor: number;
   floors: FloorData[];
+  /** 参考图数据：id -> data URL */
+  images: Record<string, string>;
 }
 
 const HEX = /^#[0-9a-f]{6}$/i;
@@ -42,17 +48,17 @@ export function sanitizeCells(list: unknown): Cell[] {
 }
 
 /** 校验楼层列表：楼层号为非 0 整数且不重复，至少保留一层 */
-export function sanitizeFloors(list: unknown): FloorData[] {
+export function sanitizeFloors(list: unknown, knownImage?: (id: string) => boolean): FloorData[] {
   const out: FloorData[] = [];
   const seen = new Set<number>();
   if (Array.isArray(list)) {
     for (const f of list as any[]) {
       if (!f || !Number.isInteger(f.level) || f.level === 0 || seen.has(f.level)) continue;
       seen.add(f.level);
-      out.push({ level: f.level, cells: sanitizeCells(f.cells), vectors: sanitizeVectors(f.vectors), notes: sanitizeNotes(f.notes) });
+      out.push({ level: f.level, cells: sanitizeCells(f.cells), vectors: sanitizeVectors(f.vectors), notes: sanitizeNotes(f.notes), images: sanitizeRefImages(f.images, knownImage) });
     }
   }
-  if (!out.length) out.push({ level: 1, cells: [], vectors: [], notes: [] });
+  if (!out.length) out.push({ level: 1, cells: [], vectors: [], notes: [], images: [] });
   return out.sort((a, b) => b.level - a.level);
 }
 
@@ -76,8 +82,13 @@ export function parseProject(text: string): ProjectFile {
   const view = v && [v.x, v.y, v.zoom].every((n) => typeof n === "number" && isFinite(n)) && v.zoom > 0
     ? { x: v.x, y: v.y, zoom: v.zoom }
     : { x: 0, y: 0, zoom: 1 };
+  const images: Record<string, string> = {};
+  if (data.images && typeof data.images === "object") {
+    for (const [id, src] of Object.entries(data.images)) if (isImageDataUrl(src)) images[id] = src;
+  }
+  const known = (id: string) => Object.prototype.hasOwnProperty.call(images, id);
   const floors = Array.isArray(data.floors)
-    ? sanitizeFloors(data.floors)
+    ? sanitizeFloors(data.floors, known)
     : sanitizeFloors([{ level: 1, cells: data.cells, vectors: data.vectors, notes: [] }]);
   const currentFloor = floors.some((f) => f.level === data.currentFloor) ? data.currentFloor : floors.find((f) => f.level === 1)?.level ?? floors[0].level;
   return {
@@ -90,6 +101,7 @@ export function parseProject(text: string): ProjectFile {
     legend,
     currentFloor,
     floors,
+    images,
   };
 }
 

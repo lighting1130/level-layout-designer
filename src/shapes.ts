@@ -215,3 +215,38 @@ export function rasterizeFill(pts: Pt[], s: number): CellIJ[] {
   }
   return out;
 }
+
+// ---------------- 箭头 ----------------
+/** 线条两端的箭头：无 / 终点 / 起点 / 两端 */
+export type ArrowMode = "none" | "end" | "start" | "both";
+export const ARROW_LABELS: Record<ArrowMode, string> = { none: "无", end: "终点", start: "起点", both: "两端" };
+export const isArrowMode = (v: unknown): v is ArrowMode => v === "none" || v === "end" || v === "start" || v === "both";
+
+/**
+ * 沿折线 pts 的端点生成箭头三角形（世界坐标）。
+ * width 是线宽；箭头长度约为线宽的 2.5 倍（至少 minLen），尖端比端点再往前一点，盖住圆头线帽。
+ */
+export function arrowHeads(pts: Pt[], mode: ArrowMode, width: number, minLen = 0): Pt[][] {
+  if (mode === "none" || pts.length < 2) return [];
+  const len = Math.max(width * 2.5, minLen);
+  const head = (path: Pt[]): Pt[] | null => {
+    // path[0] 是端点，沿路径往回走 len 的距离来确定箭头方向
+    const tip0 = path[0];
+    let back = path[1], walked = 0;
+    for (let n = 1; n < path.length; n++) {
+      back = path[n];
+      walked = Math.hypot(back.x - tip0.x, back.y - tip0.y);
+      if (walked >= len) break;
+    }
+    if (walked === 0) return null;
+    const dx = (tip0.x - back.x) / walked, dy = (tip0.y - back.y) / walked;
+    const tip = { x: tip0.x + dx * width * 1.05, y: tip0.y + dy * width * 1.05 };
+    const base = { x: tip.x - dx * len, y: tip.y - dy * len };
+    const hw = len * 0.55;
+    return [tip, { x: base.x - dy * hw, y: base.y + dx * hw }, { x: base.x + dy * hw, y: base.y - dx * hw }];
+  };
+  const out: Pt[][] = [];
+  if (mode === "end" || mode === "both") { const h = head([...pts].reverse()); if (h) out.push(h); }
+  if (mode === "start" || mode === "both") { const h = head(pts); if (h) out.push(h); }
+  return out;
+}

@@ -17,6 +17,11 @@
       </div>
       <div class="sep"></div>
       <div class="group">
+        <button id="btn-image" title="导入一张参考图垫在格子下面（也可以直接把图片拖进画布，或 Ctrl+V 粘贴截图）">参考图</button>
+        <input id="file-image" type="file" accept="image/png,image/jpeg,image/webp,image/gif" hidden />
+      </div>
+      <div class="sep"></div>
+      <div class="group">
         <button id="btn-undo" title="撤销 (Ctrl+Z)">撤销</button>
         <button id="btn-redo" title="重做 (Ctrl+Shift+Z)">重做</button>
         <button id="btn-clear" title="清空当前楼层（可撤销）">清空</button>
@@ -64,6 +69,10 @@
             <button id="mode-smooth" title="平滑的矢量线条，放大也顺滑">平滑</button>
           </span>
         </div>
+        <div id="arrow-row" class="opt-row" hidden title="在线条的起点、终点或两端加箭头">
+          <label class="opt-label" for="arrow-mode">箭头</label>
+          <select id="arrow-mode"></select>
+        </div>
         <div class="opt-row" title="线条粗细，单位是当前笔刷格子（[ 和 ] 键调整）">
           <span class="opt-label">粗细</span>
           <button id="stroke-dec" aria-label="变细">−</button>
@@ -71,6 +80,20 @@
           <button id="stroke-inc" aria-label="变粗">+</button>
           <span>格</span>
         </div>
+      </div>
+    </div>
+    <div class="tool-options image-options" id="image-options" hidden>
+      <div class="opt-row"><strong>参考图</strong><span class="opt-tip">拖动移动 · 拖右下角缩放</span></div>
+      <div class="opt-row" title="参考图的不透明度">
+        <span class="opt-label">透明</span>
+        <input id="image-opacity" type="range" min="5" max="100" step="1" value="50" aria-label="参考图不透明度" />
+        <span id="image-opacity-text" class="opt-num">50%</span>
+      </div>
+      <div class="opt-row">
+        <label class="check" title="锁定后点击会穿透这张图，可以直接在上面画；框选工具下双击图片可重新选中"><input id="image-lock" type="checkbox" /> 锁定</label>
+        <span class="spacer"></span>
+        <button id="image-front" title="把这张图放到其他参考图上面">置顶</button>
+        <button id="image-delete" class="danger-text" title="删除这张参考图 (Delete)">删除</button>
       </div>
     </div>
     <aside class="legend" id="legend" aria-label="颜色说明">

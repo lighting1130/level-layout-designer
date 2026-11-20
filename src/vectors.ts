@@ -1,5 +1,5 @@
 import type { Camera } from "./camera";
-import { arcCircle, arcPoints, clampSides, shapeBox, shapePolygon, type Pt, type ShapeKind } from "./shapes";
+import { arcCircle, arcPoints, arrowHeads, clampSides, isArrowMode, shapeBox, shapePolygon, type ArrowMode, type Pt, type ShapeKind } from "./shapes";
 
 /**
  * 平滑（矢量）图形：保存几何参数而不是格子，绘制时用 Canvas 的圆弧/椭圆/折线，
@@ -16,6 +16,8 @@ export interface VectorShape {
   fill: boolean;
   /** 多边形的边数（kind 为 polygon 时） */
   sides?: number;
+  /** 箭头（弧线和直线，可选） */
+  arrow?: ArrowMode;
 }
 
 const KINDS = new Set(["arc", "line", "rect", "ellipse", "triangle", "diamond", "hexagon", "polygon"]);
@@ -32,6 +34,7 @@ export function sanitizeVectors(list: unknown): VectorShape[] {
       kind: v.kind, a: { x: v.a.x, y: v.a.y }, b: { x: v.b.x, y: v.b.y }, bend: v.bend ? { x: v.bend.x, y: v.bend.y } : null,
       constrain: !!v.constrain, color: v.color.toLowerCase(), width: v.width, fill: !!v.fill,
       ...(v.kind === "polygon" ? { sides: clampSides(Number(v.sides)) } : {}),
+      ...(!isClosed(v) && isArrowMode(v.arrow) && v.arrow !== "none" ? { arrow: v.arrow } : {}),
     }));
 }
 
@@ -74,6 +77,16 @@ export function drawVector(ctx: CanvasRenderingContext2D, cam: Camera, v: Vector
   ctx.lineJoin = "round";
   ctx.lineCap = "round";
   ctx.stroke();
+  if (v.arrow && v.arrow !== "none" && !isClosed(v)) {
+    // 箭头：线太细时按屏幕最小 10 像素画，保证看得见
+    ctx.fillStyle = v.color;
+    for (const tri of arrowHeads(outline(v).pts, v.arrow, Math.max(v.width, 1 / cam.zoom), 10 / cam.zoom)) {
+      ctx.beginPath();
+      tri.forEach((p, n) => { const q = cam.worldToScreen(p.x, p.y); n ? ctx.lineTo(q.x, q.y) : ctx.moveTo(q.x, q.y); });
+      ctx.closePath();
+      ctx.fill();
+    }
+  }
   ctx.globalAlpha = 1;
 }
 
