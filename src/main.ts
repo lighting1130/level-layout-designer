@@ -3,7 +3,7 @@ import { CELL_SIZE, SUBDIVISION, brushLevel, drawBackground, drawGrid, finestLev
 import { CellLayer, type Cell, type Change } from "./cells";
 import { MAX_SHAPE_CELLS, SHAPE_LABELS, TooManyCellsError, arcPoints, rasterizeFill, rasterizeThickStroke, clampSides, shapePolygon, type CellIJ, type Pt, type ShapeKind } from "./shapes";
 import { drawVector, drawVectors, hitVector, isClosed, moveVector, vectorBounds, sanitizeVectors, type VectorShape } from "./vectors";
-import { drawNotes, type Note, type NoteBox } from "./notes";
+import { drawNotes, moveNoteLabel, moveNotePin, type Note, type NoteBox } from "./notes";
 import { PROJECT_FORMAT, PROJECT_VERSION, floorName, parseProject, projectFileName, sanitizeFloors, type FloorData, type ProjectFile } from "./project";
 
 const canvas = document.getElementById("canvas") as HTMLCanvasElement;
@@ -596,7 +596,7 @@ function frame() {
     if (noteDrag?.moved) {
       // 拖动中的备注画在新位置，并高亮
       const d = noteDrag;
-      const ghost = { ...d.note, x: d.note.x + d.dx, y: d.note.y + d.dy };
+      const ghost = draggedNote(d);
       shown = shown.map((n) => (n === d.note ? ghost : n));
       hl = new Set([...(hl ?? []), ghost]);
     }
@@ -841,7 +841,7 @@ function draftHint(): string {
     if (draft.phase === "pickEnd" || draft.phase === "drag") return "弧线：选择终点";
     return "弧线：移动鼠标调整弯曲，点击确认（Esc 取消）";
   }
-  if (tool === "note") return "备注：点击空白处添加，点击备注编辑，按住备注拖动可移动位置";
+  if (tool === "note") return "备注：点击空白处添加，点击便签编辑；拖便签或拖圆点可分别移动，连线自动伸缩";
   if (tool === "select") return selection ? "拖动选区移动 · 方向键微调 · Delete 删除 · Esc 取消" : "框选：拖出一个框选中内容（Ctrl+A 全选当前层）";
   if (tool === "shape") return draft ? "松开生成；按住 Shift 画正图形" : "图形：从一个角拖到对角";
   return "";
@@ -851,9 +851,13 @@ function draftHint(): string {
 /** 本帧当前楼层备注在屏幕上的位置，用于点击命中 */
 let noteBoxes: NoteBox[] = [];
 function noteAt(sx: number, sy: number): Note | null {
+  return noteHit(sx, sy)?.note ?? null;
+}
+/** 命中的备注，以及点到的是钉子还是便签 */
+function noteHit(sx: number, sy: number): { note: Note; pin: boolean } | null {
   for (let n = noteBoxes.length - 1; n >= 0; n--) {
     const b = noteBoxes[n];
-    if (sx >= b.x0 && sx <= b.x1 && sy >= b.y0 && sy <= b.y1) return b.note;
+    if (sx >= b.x0 && sx <= b.x1 && sy >= b.y0 && sy <= b.y1) return { note: b.note, pin: b.pin };
   }
   return null;
 }
@@ -946,21 +950,28 @@ let selection: Selection | null = null;
 let marquee: { a: Pt; b: Pt } | null = null;
 let moveDrag: { start: Pt; dx: number; dy: number } | null = null;
 /** 正在拖动的单条备注：按下时记录起点，移动超过几像素才算拖动，否则当作点击 */
-let noteDrag: { note: Note; start: Pt; startScreen: Pt; dx: number; dy: number; moved: boolean } | null = null;
+/** pin = true：拖钉子（便签不动）；否则拖便签（钉子不动）。两者之间的连线自动伸缩 */
+let noteDrag: { note: Note; pin: boolean; start: Pt; startScreen: Pt; dx: number; dy: number; moved: boolean } | null = null;
 
-function beginNoteDrag(note: Note, p: Pt) {
+function beginNoteDrag(hit: { note: Note; pin: boolean }, p: Pt) {
   mode = "noteDrag";
-  noteDrag = { note, start: cam.screenToWorld(p.x, p.y), startScreen: p, dx: 0, dy: 0, moved: false };
+  noteDrag = { note: hit.note, pin: hit.pin, start: cam.screenToWorld(p.x, p.y), startScreen: p, dx: 0, dy: 0, moved: false };
+}
+
+/** 按当前拖动量算出备注的新样子 */
+function draggedNote(d: NonNullable<typeof noteDrag>): Note {
+  return d.pin ? moveNotePin(d.note, d.dx, d.dy, cam.zoom) : moveNoteLabel(d.note, d.dx * cam.zoom, d.dy * cam.zoom);
 }
 
 /** 松开备注：拖动过就移动并记入撤销；只是点了一下则编辑（备注工具）或选中（框选工具） */
 function endNoteDrag() {
   if (!noteDrag) return;
-  const { note, dx, dy, moved } = noteDrag;
+  const d = noteDrag;
+  const { note, dx, dy, moved } = d;
   noteDrag = null;
   if (moved && (dx || dy)) {
     const before = notes;
-    const movedNote = { ...note, x: note.x + dx, y: note.y + dy };
+    const movedNote = draggedNote(d);
     notes = notes.map((n) => (n === note ? movedNote : n));
     commit(new Map(), undefined, before);
     if (tool === "select") selection = makeSelection([], [], [movedNote]);
@@ -1137,12 +1148,12 @@ canvas.addEventListener("pointerdown", (e) => {
   } else if (e.button === 0 && tool === "note") {
     e.preventDefault();
     if (editing) closeNoteEditor();
-    const hit = noteAt(p.x, p.y);
+    const hit = noteHit(p.x, p.y);
     if (hit) beginNoteDrag(hit, p);
     else openNoteEditor(null, cam.screenToWorld(p.x, p.y));
   } else if (e.button === 0 && tool === "select") {
     const w = cam.screenToWorld(p.x, p.y);
-    const hitNote = noteAt(p.x, p.y);
+    const hitNote = noteHit(p.x, p.y);
     if (selection && inSelection(w)) {
       mode = "move";
       moveDrag = { start: w, dx: 0, dy: 0 };
