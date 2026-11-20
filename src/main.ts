@@ -1,7 +1,7 @@
 import { Camera } from "./camera";
 import { CELL_SIZE, SUBDIVISION, brushLevel, drawBackground, drawGrid, finestLevel, levelStep } from "./grid";
 import { CellLayer, type Change } from "./cells";
-import { MAX_SHAPE_CELLS, SHAPE_LABELS, TooManyCellsError, arcPoints, rasterizeFill, rasterizeThickStroke, shapePolygon, type CellIJ, type Pt, type ShapeKind } from "./shapes";
+import { MAX_SHAPE_CELLS, SHAPE_LABELS, TooManyCellsError, arcPoints, rasterizeFill, rasterizeThickStroke, clampSides, shapePolygon, type CellIJ, type Pt, type ShapeKind } from "./shapes";
 import { drawVector, drawVectors, hitVector, isClosed, sanitizeVectors, type VectorShape } from "./vectors";
 import { PROJECT_FORMAT, PROJECT_VERSION, parseProject, projectFileName, type ProjectFile } from "./project";
 
@@ -189,6 +189,7 @@ function setTool(t: Tool) {
   tool = t;
   shapeOptions.hidden = t !== "shape";
   $("tool-options").hidden = t !== "shape" && t !== "arc";
+  $("sides-row").hidden = t !== "shape" || shapeKindSel.value !== "polygon";
   strokeOptions.hidden = t !== "shape" && t !== "arc";
   for (const b of document.querySelectorAll<HTMLButtonElement>(".tool")) {
     b.setAttribute("aria-pressed", String(b.dataset.tool === t));
@@ -212,7 +213,26 @@ for (const [k, label] of Object.entries(SHAPE_LABELS)) {
   shapeKindSel.appendChild(o);
 }
 shapeKindSel.value = "rect";
-shapeKindSel.addEventListener("change", () => { setTool("shape"); shapeKindSel.blur(); });
+shapeKindSel.addEventListener("change", () => { setTool("shape"); shapeKindSel.blur(); updateSidesRow(); });
+// 多边形边数（3–64），选“多边形”时显示
+const sidesInput = $("shape-sides") as HTMLInputElement;
+const SIDES_KEY = "level-layout-designer.sides.v1";
+let sides = 5;
+try { sides = clampSides(Number(localStorage.getItem(SIDES_KEY)) || 5); } catch { /* 忽略 */ }
+sidesInput.value = String(sides);
+function setSides(n: number) {
+  sides = clampSides(n);
+  sidesInput.value = String(sides);
+  try { localStorage.setItem(SIDES_KEY, String(sides)); } catch { /* 忽略 */ }
+  updateDraftCells();
+  requestRender();
+}
+function updateSidesRow() { $("sides-row").hidden = tool !== "shape" || shapeKindSel.value !== "polygon"; }
+sidesInput.addEventListener("change", () => { setSides(Number(sidesInput.value)); sidesInput.blur(); });
+sidesInput.addEventListener("keydown", (e) => { if (e.key === "Enter" || e.key === "Escape") sidesInput.blur(); });
+$("sides-dec").addEventListener("click", () => setSides(sides - 1));
+$("sides-inc").addEventListener("click", () => setSides(sides + 1));
+updateSidesRow();
 shapeFill.addEventListener("change", () => { shapeFill.blur(); setTool("shape"); updateDraftCells(); requestRender(); });
 
 // 线条粗细（弧线和图形共用），单位是当前笔刷格子
@@ -535,7 +555,7 @@ function snapToCellCenter(sx: number, sy: number, k: number): Pt {
 
 function draftGeometry(d: Draft): { pts: Pt[]; closed: boolean } {
   if (d.kind === "arc") return { pts: d.bend ? arcPoints(d.a, d.b, d.bend) : [d.a, d.b], closed: false };
-  return shapePolygon(d.kind, d.a, d.b, d.constrain);
+  return shapePolygon(d.kind, d.a, d.b, d.constrain, sides);
 }
 
 function updateDraftCells() {
@@ -564,6 +584,7 @@ function draftVector(d: Draft): VectorShape {
   return {
     kind: d.kind, a: d.a, b: d.b, bend: d.bend, constrain: d.constrain, color: currentColor,
     width: strokeWidth * levelStep(d.k), fill: isClosed(d) && shapeFill.checked,
+    ...(d.kind === "polygon" ? { sides } : {}),
   };
 }
 

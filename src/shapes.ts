@@ -2,7 +2,7 @@
 export interface Pt { x: number; y: number }
 export interface CellIJ { i: number; j: number }
 
-export type ShapeKind = "line" | "rect" | "ellipse" | "triangle" | "diamond" | "hexagon";
+export type ShapeKind = "line" | "rect" | "ellipse" | "triangle" | "diamond" | "hexagon" | "polygon";
 
 export const SHAPE_LABELS: Record<ShapeKind, string> = {
   line: "直线",
@@ -11,6 +11,7 @@ export const SHAPE_LABELS: Record<ShapeKind, string> = {
   triangle: "三角形",
   diamond: "菱形",
   hexagon: "六边形",
+  polygon: "多边形（自定边数）",
 };
 
 /** 单次图形最多生成的格子数，防止在极小的格子层级上画出超大图形卡死 */
@@ -19,7 +20,12 @@ export const MAX_SHAPE_CELLS = 200_000;
 export class TooManyCellsError extends Error {}
 
 /** 由拖拽的两个角点得到图形的轮廓点（闭合图形不重复首点）。constrain = 按住 Shift：正方形/正圆/正多边形 */
-export function shapePolygon(kind: ShapeKind, a: Pt, b: Pt, constrain: boolean): { pts: Pt[]; closed: boolean } {
+/** 多边形边数范围 */
+export const MIN_SIDES = 3;
+export const MAX_SIDES = 64;
+export const clampSides = (n: number) => Math.max(MIN_SIDES, Math.min(MAX_SIDES, Math.round(n) || 5));
+
+export function shapePolygon(kind: ShapeKind, a: Pt, b: Pt, constrain: boolean, sides = 5): { pts: Pt[]; closed: boolean } {
   if (kind === "line") {
     if (constrain) b = snapAngle(a, b);
     return { pts: [a, b], closed: false };
@@ -33,6 +39,16 @@ export function shapePolygon(kind: ShapeKind, a: Pt, b: Pt, constrain: boolean):
       return { pts: [{ x: cx, y: y0 }, { x: x0 + w, y: y0 + h }, { x: x0, y: y0 + h }], closed: true };
     case "diamond":
       return { pts: [{ x: cx, y: y0 }, { x: x0 + w, y: cy }, { x: cx, y: y0 + h }, { x: x0, y: cy }], closed: true };
+    case "polygon": {
+      // 正 N 边形内接于外接框的椭圆，第一个顶点朝上
+      const n = clampSides(sides);
+      const pts: Pt[] = [];
+      for (let m = 0; m < n; m++) {
+        const t = -Math.PI / 2 + (2 * Math.PI * m) / n;
+        pts.push({ x: cx + (w / 2) * Math.cos(t), y: cy + (h / 2) * Math.sin(t) });
+      }
+      return { pts, closed: true };
+    }
     case "hexagon": {
       const pts: Pt[] = [];
       for (let n = 0; n < 6; n++) {

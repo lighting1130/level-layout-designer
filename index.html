@@ -37,6 +37,13 @@
         <select id="shape-kind"></select>
         <label class="check" title="勾选后内部也填满颜色"><input id="shape-fill" type="checkbox" /> 填充</label>
       </div>
+      <div id="sides-row" class="opt-row stroke" hidden title="正多边形的边数（3–64）">
+        <span class="opt-label">边数</span>
+        <button id="sides-dec" aria-label="减少边数">−</button>
+        <input id="shape-sides" type="number" min="3" max="64" step="1" value="5" aria-label="多边形边数" />
+        <button id="sides-inc" aria-label="增加边数">+</button>
+        <span>边</span>
+      </div>
       <div id="stroke-options" class="opt-col stroke" hidden>
         <div class="opt-row">
           <span class="opt-label">模式</span>
