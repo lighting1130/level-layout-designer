@@ -1,4 +1,5 @@
 import type { Cell } from "./cells";
+import { getLang, t } from "./i18n";
 import { sanitizeVectors, type VectorShape } from "./vectors";
 import { sanitizeNotes, type Note } from "./notes";
 import { sanitizeCustomIcons, sanitizeIcons, type CustomIcon, type MapIcon } from "./icons";
@@ -84,11 +85,11 @@ export function parseProject(text: string): ProjectFile {
   try {
     data = JSON.parse(text);
   } catch {
-    throw new Error("文件不是有效的 JSON。");
+    throw new Error(t("文件不是有效的 JSON。"));
   }
-  if (!data || data.format !== PROJECT_FORMAT) throw new Error("这不是关卡 Layout 设计器的工程文件。");
+  if (!data || data.format !== PROJECT_FORMAT) throw new Error(t("这不是关卡 Layout 设计器的工程文件。"));
   if (typeof data.version !== "number" || data.version > PROJECT_VERSION) {
-    throw new Error("工程文件版本比当前工具新，请使用新版工具打开。");
+    throw new Error(t("工程文件版本比当前工具新，请使用新版工具打开。"));
   }
   const legend = Array.isArray(data.legend)
     ? data.legend.filter((e: any) => e && typeof e.name === "string" && HEX.test(e.color))
@@ -125,6 +126,8 @@ export function parseProject(text: string): ProjectFile {
 
 /** 楼层显示名：1 → 第一层，-1 → 负一层 */
 export function floorName(level: number): string {
+  // 英文：1F、2F……地下层 B1、B2
+  if (getLang() === "en") return level < 0 ? `B${-level}` : `${level}F`;
   const n = Math.abs(level);
   return (level < 0 ? "负" : "第") + chineseNumber(n) + "层";
 }
@@ -139,6 +142,6 @@ function chineseNumber(n: number): string {
 
 /** 把工程名变成安全的文件名 */
 export function projectFileName(name: string): string {
-  const base = (name.trim() || "未命名关卡").replace(/[\\/:*?"<>|\u0000-\u001f]+/g, "_").slice(0, 80);
+  const base = (name.trim() || t("未命名关卡")).replace(/[\\/:*?"<>|\u0000-\u001f]+/g, "_").slice(0, 80);
   return `${base}.json`;
 }

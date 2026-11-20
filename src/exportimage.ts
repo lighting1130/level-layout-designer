@@ -1,4 +1,5 @@
 import { Camera } from "./camera";
+import { t } from "./i18n";
 import type { CellLayer } from "./cells";
 import { CELL_SIZE, drawGrid, levelStep } from "./grid";
 import { customImageId, drawIconAt, drawIcons, type MapIcon } from "./icons";
@@ -127,7 +128,7 @@ function drawLegend(ctx: CanvasRenderingContext2D, items: LegendItem[], top: num
   ctx.fillStyle = theme.sub;
   ctx.font = `bold 13px ${FONT}`;
   ctx.textBaseline = "middle";
-  ctx.fillText("颜色说明", 16, top + 18);
+  ctx.fillText(t("颜色说明"), 16, top + 18);
   ctx.font = `14px ${FONT}`;
   for (const { item, x, y } of pos) {
     const cy = top + y + 8;
@@ -235,7 +236,7 @@ export async function renderExport(input: RenderInput, opts: ExportOptions): Pro
       ctx.fillText(`${input.title} · ${f.name}`, 16, y + HEADER / 2);
       ctx.fillStyle = theme.sub;
       ctx.font = `13px ${FONT}`;
-      const scale = `1 格 = ${Number((CELL_SIZE * zoom).toFixed(2))} 像素`;
+      const scale = t("1 格 = {px} 像素", { px: Number((CELL_SIZE * zoom).toFixed(2)) });
       ctx.fillText(scale, width - 16 - ctx.measureText(scale).width, y + HEADER / 2);
       y += HEADER;
     }
@@ -282,7 +283,7 @@ export async function renderExport(input: RenderInput, opts: ExportOptions): Pro
     let y = 0;
     input.floors.forEach((_, n) => { y += drawFloor(ctx, n, y, width, true); });
     drawLegend(ctx, items, y, width, theme, getImage);
-    images.push({ name: "全部楼层", canvas });
+    images.push({ name: t("全部楼层"), canvas });
   } else {
     input.floors.forEach((f, n) => {
       const s = sizeAt(n, zoom);

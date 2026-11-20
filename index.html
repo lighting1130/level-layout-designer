@@ -27,6 +27,10 @@
         <button id="btn-redo" title="重做 (Ctrl+Shift+Z)">重做</button>
         <button id="btn-clear" title="清空当前楼层（可撤销）">清空</button>
       </div>
+      <div class="sep"></div>
+      <div class="group">
+        <button id="btn-lang" title="切换语言" aria-label="切换语言">EN</button>
+      </div>
     </div>
     <nav class="toolcol" id="toolcol" aria-label="工具">
       <button id="tool-select" class="tool" data-tool="select" title="框选：拖框选中，拖动移动；Delete 删除 (V)"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 4h4M12 4h4M20 4v4M20 12v4M4 8v4M4 16v4h4" stroke-dasharray="0"/><path d="M12 11l8 3-3.5 1.5L15 19z"/></svg><span>框选</span></button>
@@ -177,8 +181,8 @@
         </label>
         <div class="checks">
           <label class="check"><input id="exp-grid" type="checkbox" /> 网格线</label>
-          <label class="check"><input id="exp-notes" type="checkbox" /> 备注</label>
-          <label class="check"><input id="exp-refimages" type="checkbox" /> 参考图</label>
+          <label class="check"><input id="exp-notes" type="checkbox" /> 带备注</label>
+          <label class="check"><input id="exp-refimages" type="checkbox" /> 带参考图</label>
           <label class="check" title="颜色说明只列出这一层实际用到的颜色"><input id="exp-usedonly" type="checkbox" /> 只列出用到的颜色</label>
           <label class="check" title="每层用同一个范围和比例，导出的图可以叠在一起对照"><input id="exp-samearea" type="checkbox" /> 各层范围对齐</label>
         </div>

@@ -184,7 +184,7 @@ select {
   max-height: 100%; overflow-y: auto;
 }
 .modal-box h2 { margin: 0 0 4px; font-size: 16px; }
-.modal-box .field { display: grid; grid-template-columns: 56px 1fr; align-items: center; gap: 8px; }
+.modal-box .field { display: grid; grid-template-columns: max-content 1fr; align-items: center; gap: 8px; }
 .modal-box .field span { opacity: 0.75; }
 .modal-box select { width: 100%; min-width: 0; }
 .modal-box .checks { display: flex; flex-wrap: wrap; gap: 6px 10px; }

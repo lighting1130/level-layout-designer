@@ -1,4 +1,5 @@
 import { Camera } from "./camera";
+import { captureStatic, getLang, setLang, t } from "./i18n";
 import { CELL_SIZE, SUBDIVISION, brushLevel, drawBackground, drawGrid, finestLevel, levelStep } from "./grid";
 import { CellLayer, type Cell, type Change } from "./cells";
 import { ARROW_LABELS, arrowHeads, isArrowMode, type ArrowMode, MAX_SHAPE_CELLS, SHAPE_LABELS, TooManyCellsError, arcPoints, rasterizeFill, rasterizeThickStroke, clampSides, shapePolygon, type CellIJ, type Pt, type ShapeKind } from "./shapes";
@@ -9,6 +10,8 @@ import { ICONS, customImageId, customKind, drawIconAt, drawIcons, hitIcon, isBui
 import { DEFAULT_EXPORT, canvasToPng, makeZip, renderExport, type ExportOptions } from "./exportimage";
 import { PROJECT_FORMAT, PROJECT_VERSION, floorName, parseProject, projectFileName, sanitizeFloors, sanitizeIconLabels, type FloorData, type ProjectFile } from "./project";
 
+// 先记下页面里写死的中文，之后切换语言时替换（必须在动态生成内容之前）
+captureStatic(document.body);
 const canvas = document.getElementById("canvas") as HTMLCanvasElement;
 const ctx = canvas.getContext("2d")!;
 const $ = (id: string) => document.getElementById(id)!;
@@ -106,12 +109,12 @@ function renderLegend() {
     const sw = document.createElement("label");
     sw.className = "legend-swatch";
     sw.style.background = e.color;
-    sw.title = "点击修改颜色";
+    sw.title = t("点击修改颜色");
     const ci = document.createElement("input");
     ci.type = "color";
     ci.value = e.color;
     ci.id = `legend-color-${e.id}`;
-    ci.setAttribute("aria-label", `${e.name} 的颜色`);
+    ci.setAttribute("aria-label", t("{name} 的颜色", { name: t(e.name) }));
     ci.addEventListener("input", () => {
       const to = ci.value.toLowerCase();
       recolor(e.color, to);
@@ -126,9 +129,9 @@ function renderLegend() {
     name.type = "text";
     name.className = "legend-name";
     name.id = `legend-name-${e.id}`;
-    name.value = e.name;
-    name.placeholder = "说明";
-    name.setAttribute("aria-label", "颜色说明");
+    name.value = t(e.name);
+    name.placeholder = t("说明");
+    name.setAttribute("aria-label", t("颜色说明"));
     name.addEventListener("input", () => { e.name = name.value; saveLegend(); });
     name.addEventListener("keydown", (ev) => { if (ev.key === "Enter" || ev.key === "Escape") name.blur(); });
 
@@ -139,8 +142,8 @@ function renderLegend() {
     const del = document.createElement("button");
     del.className = "legend-del";
     del.textContent = "×";
-    del.title = "删除这个颜色（已画的格子保留）";
-    del.setAttribute("aria-label", `删除 ${e.name}`);
+    del.title = t("删除这个颜色（已画的格子保留）");
+    del.setAttribute("aria-label", t("删除 {name}", { name: t(e.name) }));
     del.disabled = legend.length <= 1;
     del.addEventListener("click", (ev) => {
       ev.stopPropagation();
@@ -159,7 +162,7 @@ $("legend-add").addEventListener("click", () => {
   // 新颜色取一个色相与现有颜色尽量不同的颜色
   const hue = (legend.length * 137.5) % 360;
   const color = hslToHex(hue, 55, 60);
-  const e = { id: nextId++, name: `新颜色 ${legend.length + 1}`, color };
+  const e = { id: nextId++, name: t("新颜色 {n}", { n: legend.length + 1 }), color };
   legend.push(e);
   saveLegend();
   renderLegend();
@@ -176,7 +179,7 @@ $("legend-reset").addEventListener("click", () => {
 });
 $("legend-toggle").addEventListener("click", () => {
   const collapsed = legendPanel.classList.toggle("collapsed");
-  $("legend-toggle").textContent = collapsed ? "展开" : "收起";
+  $("legend-toggle").textContent = collapsed ? t("展开") : t("收起");
   $("legend-toggle").setAttribute("aria-expanded", String(!collapsed));
 });
 if (window.innerWidth < 640) $("legend-toggle").click();
@@ -218,6 +221,11 @@ for (const b of document.querySelectorAll<HTMLButtonElement>(".tool")) {
 const shapeOptions = $("shape-options");
 const shapeKindSel = $("shape-kind") as HTMLSelectElement;
 const shapeFill = $("shape-fill") as HTMLInputElement;
+/** 下拉框选项的文字跟随语言 */
+function relabelOptions() {
+  for (const o of shapeKindSel.options) o.textContent = t(SHAPE_LABELS[o.value as ShapeKind]);
+  for (const o of arrowSel.options) o.textContent = t(ARROW_LABELS[o.value as ArrowMode]);
+}
 for (const [k, label] of Object.entries(SHAPE_LABELS)) {
   const o = document.createElement("option");
   o.value = k;
@@ -375,7 +383,7 @@ function addFloor(dir: 1 | -1) {
   switchFloor(level);
   renderFloors();
   save();
-  toast(`已添加${floorName(level)}`);
+  toast(t("已添加{floor}", { floor: floorName(level) }));
 }
 
 let deleteArmed = 0;
@@ -383,7 +391,7 @@ function deleteCurrentFloor(btn: HTMLButtonElement) {
   if (floors.length <= 1) return;
   // 删除不可撤销：第一次点击变成“确认删除”，3 秒内再点一次才删除
   if (!deleteArmed) {
-    btn.textContent = "确认删除？";
+    btn.textContent = t("确认删除？");
     btn.classList.add("danger");
     deleteArmed = window.setTimeout(() => { deleteArmed = 0; renderFloors(); }, 3000);
     return;
@@ -406,7 +414,7 @@ function deleteCurrentFloor(btn: HTMLButtonElement) {
   imgSel = null;
   renderFloors();
   afterEdit();
-  toast(`已删除${floorName(removed)}`);
+  toast(t("已删除{floor}", { floor: floorName(removed) }));
 }
 
 /** 非当前楼层的不透明度：每远一层乘 0.4，太淡就不画 */
@@ -430,8 +438,8 @@ function renderFloors() {
     name.textContent = floorName(f.level);
     const meta = document.createElement("span");
     meta.className = "floor-meta";
-    meta.textContent = f.level === currentLevel ? "当前" : count ? String(count) : "";
-    b.title = `${floorName(f.level)}：${count} 个格子/图形（PageUp / PageDown 切换）`;
+    meta.textContent = f.level === currentLevel ? t("当前") : count ? String(count) : "";
+    b.title = t("{floor}：{n} 个格子/图形（PageUp / PageDown 切换）", { floor: floorName(f.level), n: count });
     b.append(name, meta);
     b.addEventListener("click", () => switchFloor(f.level));
     floorList.appendChild(b);
@@ -440,7 +448,7 @@ function renderFloors() {
   floorList.querySelector<HTMLElement>('[aria-pressed="true"]')?.scrollIntoView({ block: "nearest" });
   const del = $("floor-del") as HTMLButtonElement;
   del.disabled = floors.length <= 1;
-  if (!deleteArmed) { del.textContent = "删除当前层"; del.classList.remove("danger"); }
+  if (!deleteArmed) { del.textContent = t("删除当前层"); del.classList.remove("danger"); }
 }
 $("floor-add-up").addEventListener("click", () => addFloor(1));
 $("floor-add-down").addEventListener("click", () => addFloor(-1));
@@ -581,7 +589,7 @@ function flushSave() {
   } catch {
     if (!imageSaveWarned) {
       imageSaveWarned = true;
-      toast("参考图太大，浏览器存不下，刷新后可能会丢失。请记得导出工程文件保存。", true);
+      toast(t("参考图太大，浏览器存不下，刷新后可能会丢失。请记得导出工程文件保存。"), true);
     }
   }
 }
@@ -738,7 +746,7 @@ function frame() {
     hintEl.textContent = hint;
     hintEl.hidden = !hint;
     hudZoom.textContent = formatZoom(cam.zoom);
-    hudBrush.textContent = `笔刷: ${formatCellSize(activeLevel())}`;
+    hudBrush.textContent = t("笔刷: {size}", { size: formatCellSize(activeLevel()) });
     hudFloor.textContent = floorName(currentLevel);
     syncImagePanel();
   }
@@ -753,13 +761,13 @@ function formatZoom(z: number): string {
 
 /** 笔刷格子相对基础格子的大小，如 "1 格"、"10×10 格"、"1/10 格" */
 function formatCellSize(k: number): string {
-  if (k === 0) return "1 格";
+  if (k === 0) return t("1 格");
   if (k > 0) {
     const n = Math.pow(SUBDIVISION, k);
-    return n < 1e6 ? `${n}×${n} 格` : `10^${k}×10^${k} 格`;
+    return t("{n}×{n} 格", { n: n < 1e6 ? String(n) : `10^${k}` });
   }
   const n = Math.pow(SUBDIVISION, -k);
-  return n < 1e6 ? `1/${n} 格` : `1/10^${-k} 格`;
+  return t("1/{n} 格", { n: n < 1e6 ? String(n) : `10^${-k}` });
 }
 
 // ---- 鼠标位置 -> 格子坐标（放大细分后显示小数，精度跟随当前最细一级网格） ----
@@ -770,7 +778,7 @@ function updateCursorCell(sx: number, sy: number) {
     const scale = Math.pow(10, decimals);
     return (Math.floor((v / CELL_SIZE) * scale) / scale).toFixed(decimals);
   };
-  hudCell.textContent = `格子: ${f(w.x)}, ${f(w.y)}`;
+  hudCell.textContent = t("格子: {x}, {y}", { x: f(w.x), y: f(w.y) });
 }
 
 // ---------------- 指针：涂色 / 平移 / 双指缩放 ----------------
@@ -927,7 +935,7 @@ function commitDraft() {
     vectors = [...vectors, draftVector(draft)];
     commit(new Map(), before);
   } else if (draft.tooMany) {
-    toast(`图形太大：超过 ${MAX_SHAPE_CELLS.toLocaleString()} 个格子。请缩小视图（笔刷格子变大）后再画。`, true);
+    toast(t("图形太大：超过 {n} 个格子。请缩小视图（笔刷格子变大）后再画。", { n: MAX_SHAPE_CELLS.toLocaleString() }), true);
   } else {
     const change: Change = new Map();
     for (const c of draft.cells) layer.paint(draft.k, c.i, c.j, currentColor, change);
@@ -986,13 +994,13 @@ function drawDraft() {
 
 function draftHint(): string {
   if (tool === "arc") {
-    if (!draft) return "弧线：按下设起点，拖到终点松开";
-    if (draft.phase === "pickEnd" || draft.phase === "drag") return "弧线：选择终点";
-    return "弧线：移动鼠标调整弯曲，点击确认（Esc 取消）";
+    if (!draft) return t("弧线：按下设起点，拖到终点松开");
+    if (draft.phase === "pickEnd" || draft.phase === "drag") return t("弧线：选择终点");
+    return t("弧线：移动鼠标调整弯曲，点击确认（Esc 取消）");
   }
-  if (tool === "note") return "备注：点击空白处添加，点击便签编辑；拖便签或拖圆点可分别移动，连线自动伸缩";
-  if (tool === "select") return selection ? "拖动选区移动 · 方向键微调 · Delete 删除 · Esc 取消" : "框选：拖出一个框选中内容（Ctrl+A 全选当前层）";
-  if (tool === "shape") return draft ? "松开生成；按住 Shift 画正图形" : "图形：从一个角拖到对角";
+  if (tool === "note") return t("备注：点击空白处添加，点击便签编辑；拖便签或拖圆点可分别移动，连线自动伸缩");
+  if (tool === "select") return selection ? t("拖动选区移动 · 方向键微调 · Delete 删除 · Esc 取消") : t("框选：拖出一个框选中内容（Ctrl+A 全选当前层）");
+  if (tool === "shape") return draft ? t("松开生成；按住 Shift 画正图形") : t("图形：从一个角拖到对角");
   return "";
 }
 
@@ -1051,7 +1059,7 @@ function saveNote() {
     notes = [...notes, { x: editing.at.x, y: editing.at.y, text }];
   } else {
     // 新备注还没有内容：不要悄悄关掉，提示用户先写字
-    toast("备注还是空的，先写点文字再保存", true);
+    toast(t("备注还是空的，先写点文字再保存"), true);
     noteText.focus();
     return;
   }
@@ -1194,7 +1202,7 @@ function deleteImage() {
   images = images.filter((r) => r !== gone);
   imgSel = null;
   commit(new Map(), undefined, undefined, before);
-  toast("已删除参考图（可撤销）");
+  toast(t("已删除参考图（可撤销）"));
 }
 function drawImageSelection() {
   if (!imgSel || tool !== "select") return;
@@ -1221,7 +1229,7 @@ async function importImageFile(file: Blob, at?: Pt) {
   try {
     loaded = await loadImageFile(file);
   } catch {
-    toast("无法读取这张图片，请换 PNG / JPG / WebP 格式试试。", true);
+    toast(t("无法读取这张图片，请换 PNG / JPG / WebP 格式试试。"), true);
     return;
   }
   const id = imageStore.add(loaded.src);
@@ -1235,7 +1243,7 @@ async function importImageFile(file: Blob, at?: Pt) {
   setTool("select");
   imgSel = img;
   requestRender();
-  toast("已导入参考图：拖动移动，拖右下角缩放；调好后勾选“锁定”，就能在上面画了");
+  toast(t("已导入参考图：拖动移动，拖右下角缩放；调好后勾选“锁定”，就能在上面画了"));
 }
 
 const imagePanel = $("image-options");
@@ -1272,7 +1280,7 @@ imageLock.addEventListener("change", () => {
   const locked = imageLock.checked;
   replaceImage(imgSel, { ...imgSel, locked });
   imageLock.blur();
-  if (locked) toast("已锁定：点击会穿透这张图。要再调整，用框选工具双击图片");
+  if (locked) toast(t("已锁定：点击会穿透这张图。要再调整，用框选工具双击图片"));
 });
 $("image-delete").addEventListener("click", deleteImage);
 $("image-front").addEventListener("click", () => {
@@ -1303,8 +1311,8 @@ try {
 
 /** 图标的默认名字 */
 const iconDefaultLabel = (kind: string) => {
-  if (isBuiltinIcon(kind)) return ICONS[kind].label;
-  return customIcons.find((c) => customKind(c.id) === kind)?.name ?? "自定义图标";
+  if (isBuiltinIcon(kind)) return t(ICONS[kind].label);
+  return customIcons.find((c) => customKind(c.id) === kind)?.name ?? t("自定义图标");
 };
 /** 图标说明（用户可以在右侧“图标说明”里改成具体含义），没改过就用默认名字 */
 const ICON_LABELS_KEY = "level-layout-designer.iconlabels.v1";
@@ -1358,8 +1366,8 @@ function renderIconLegend(force = false) {
     input.maxLength = 60;
     input.value = iconLabel(kind);
     input.placeholder = iconDefaultLabel(kind);
-    input.title = `“${iconDefaultLabel(kind)}”图标在这个关卡里代表什么`;
-    input.setAttribute("aria-label", `${iconDefaultLabel(kind)} 图标的说明`);
+    input.title = t("“{name}”图标在这个关卡里代表什么", { name: iconDefaultLabel(kind) });
+    input.setAttribute("aria-label", t("{name} 图标的说明", { name: iconDefaultLabel(kind) }));
     input.addEventListener("change", () => { setIconLabel(kind, input.value); input.value = iconLabel(kind); });
     input.addEventListener("keydown", (e) => { if (e.key === "Enter" || e.key === "Escape") input.blur(); });
     row.append(pic, input);
@@ -1418,7 +1426,7 @@ function renderIconPalette() {
     const g = c.getContext("2d")!;
     g.scale(dpr, dpr);
     drawIconAt(g, kind, 12, 12, 24);
-    add(kind, def.label, c);
+    add(kind, t(def.label), c);
   }
   for (const ci of customIcons) {
     const img = document.createElement("img");
@@ -1449,17 +1457,17 @@ iconFileInput.addEventListener("change", async () => {
       const { src } = await loadImageFile(file, 256);
       const id = imageStore.add(src);
       if (!customIcons.some((c) => c.id === id)) {
-        const name = (file.name || "自定义图标").replace(/\.[^.]+$/, "").slice(0, 40) || "自定义图标";
+        const name = (file.name || t("自定义图标")).replace(/\.[^.]+$/, "").slice(0, 40) || t("自定义图标");
         customIcons = [...customIcons, { id, name }];
       }
       last = customKind(id);
       added++;
     } catch { /* 跳过读不了的文件 */ }
   }
-  if (!added) { toast("无法读取这些图片，请换 PNG / SVG / JPG / WebP 格式试试。", true); return; }
+  if (!added) { toast(t("无法读取这些图片，请换 PNG / SVG / JPG / WebP 格式试试。"), true); return; }
   save();
   setIconKind(last);
-  toast(`已导入 ${added} 个图标，点击画布放置；可以在下面改名字`);
+  toast(t("已导入 {n} 个图标，点击画布放置；可以在下面改名字", { n: added }));
 });
 iconRename.addEventListener("change", () => {
   const id = customImageId(iconKind);
@@ -1479,7 +1487,7 @@ $("icon-remove").addEventListener("click", () => {
   iconKind = "stairs-up";
   save();
   renderIconPalette();
-  if (removed) toast(`已从图标库移除「${removed.name}」（画布上已放的保留）`);
+  if (removed) toast(t("已从图标库移除「{name}」（画布上已放的保留）", { name: removed.name }));
 });
 renderIconPalette();
 
@@ -1595,7 +1603,7 @@ function recolorSelection(color: string, name: string) {
   commit(change, before);
   selection = makeSelection(cells, vecs, selection.notes, selection.icons);
   if (selection) selection.step = step;
-  toast(`已把选中的 ${cells.length + vecs.length} 项改成「${name}」`);
+  toast(t("已把选中的 {n} 项改成「{name}」", { n: cells.length + vecs.length, name: t(name) }));
 }
 
 function deleteSelection() {
@@ -1623,7 +1631,7 @@ function deleteSelection() {
   commit(change, before, notesBefore, undefined, iconsBefore);
   const n = selection.cells.length + selection.vectors.length + selection.notes.length + selection.icons.length;
   selection = null;
-  toast(`已删除 ${n} 项`);
+  toast(t("已删除 {n} 项", { n }));
 }
 
 function inSelection(w: Pt) {
@@ -1807,7 +1815,7 @@ function endPointer(e: PointerEvent) {
   if (pointers.size === 0 && mode === "marquee" && marquee) {
     selectInRect(marquee.a, marquee.b);
     marquee = null;
-    if (selection) toast(`已选中 ${selection.cells.length + selection.vectors.length + selection.notes.length + selection.icons.length} 项：拖动移动，点右侧颜色换色，Delete 删除`);
+    if (selection) toast(t("已选中 {n} 项：拖动移动，点右侧颜色换色，Delete 删除", { n: selection.cells.length + selection.vectors.length + selection.notes.length + selection.icons.length }));
   } else if (pointers.size === 0 && mode === "imgDrag") {
     endImageDrag();
   } else if (pointers.size === 0 && mode === "noteDrag") {
@@ -1970,7 +1978,7 @@ function buildProject(): ProjectFile {
   return {
     format: PROJECT_FORMAT,
     version: PROJECT_VERSION,
-    name: nameInput.value.trim() || "未命名关卡",
+    name: nameInput.value.trim() || t("未命名关卡"),
     exportedAt: new Date().toISOString(),
     grid: { cellSize: CELL_SIZE, subdivision: SUBDIVISION },
     view: { x: cam.x + width / 2 / cam.zoom, y: cam.y + height / 2 / cam.zoom, zoom: cam.zoom },
@@ -1999,9 +2007,9 @@ async function saveFile(filename: string, data: string | Blob, mime: string): Pr
       } catch (err) {
         const code = (err as { code?: string })?.code;
         if (code === "declined") return false;
-        if (code === "rate_limited") toast("上一个保存窗口还没关闭，请稍后再试。", true);
-        else if (code === "too_large") toast("文件太大，请降低清晰度或缩小范围后再试。", true);
-        else toast("这里无法保存文件，请在浏览器中打开本页面后再导出。", true);
+        if (code === "rate_limited") toast(t("上一个保存窗口还没关闭，请稍后再试。"), true);
+        else if (code === "too_large") toast(t("文件太大，请降低清晰度或缩小范围后再试。"), true);
+        else toast(t("这里无法保存文件，请在浏览器中打开本页面后再导出。"), true);
         return false;
       }
     }
@@ -2023,7 +2031,7 @@ async function exportProject() {
   const project = buildProject();
   const filename = projectFileName(project.name);
   const data = JSON.stringify(project, null, 2);
-  if (await saveFile(filename, data, "application/json")) toast(`已导出 ${filename}（${project.floors.length} 层）`);
+  if (await saveFile(filename, data, "application/json")) toast(t("已导出 {file}（{n} 层）", { file: filename, n: project.floors.length }));
 }
 
 // ---------------- 导出图片 ----------------
@@ -2052,9 +2060,9 @@ function updateExportSummary() {
   const n = o.floors === "current" ? 1 : floors.length;
   expChk("exp-samearea").disabled = o.floors === "current" || o.area === "view";
   $("export-summary").textContent =
-    o.floors === "current" ? `将导出「${floorName(currentLevel)}」一张 PNG。`
-    : o.floors === "each" ? `将导出 ${n} 张 PNG（每层一张），打包成一个 ZIP。`
-    : `将把 ${n} 层从上到下拼成一张 PNG，底部是合并的颜色和图标说明。`;
+    o.floors === "current" ? t("将导出「{floor}」一张 PNG。", { floor: floorName(currentLevel) })
+    : o.floors === "each" ? t("将导出 {n} 张 PNG（每层一张），打包成一个 ZIP。", { n })
+    : t("将把 {n} 层从上到下拼成一张 PNG，底部是合并的颜色和图标说明。", { n });
 }
 function openExportDialog() {
   if (editing) closeNoteEditor();
@@ -2085,7 +2093,7 @@ $("export-form").addEventListener("submit", async (e) => {
   try { localStorage.setItem(EXPORT_KEY, JSON.stringify(opts)); } catch { /* 忽略 */ }
   const go = $("export-go") as HTMLButtonElement;
   go.disabled = true;
-  go.textContent = "正在生成…";
+  go.textContent = t("正在生成…");
   try {
     syncFloor();
     const list = opts.floors === "current" ? floors.filter((f) => f.level === currentLevel) : floors;
@@ -2093,10 +2101,10 @@ $("export-form").addEventListener("submit", async (e) => {
     const nonEmpty = list.filter((f) => f.layer.size || f.vectors.length || f.notes.length || f.icons.length || (opts.refImages && f.images.length));
     const chosen = opts.floors === "current" || !nonEmpty.length ? list : nonEmpty;
     const v0 = cam.screenToWorld(0, 0), v1 = cam.screenToWorld(width, height);
-    const title = nameInput.value.trim() || "未命名关卡";
+    const title = nameInput.value.trim() || t("未命名关卡");
     const { images: out, downscaled } = await renderExport({
       floors: chosen.map((f) => ({ level: f.level, name: floorName(f.level), layer: f.layer, vectors: f.vectors, notes: f.notes, images: f.images, icons: f.icons })),
-      legend: legend.map(({ name, color }) => ({ name, color })),
+      legend: legend.map(({ name, color }) => ({ name: t(name), color })),
       iconLabel,
       store: imageStore,
       title,
@@ -2105,25 +2113,25 @@ $("export-form").addEventListener("submit", async (e) => {
     const base = projectFileName(title).replace(/\.json$/, "");
     let ok: boolean;
     if (out.length === 1) {
-      const name = opts.floors === "stack" ? `${base}-全部楼层.png` : `${base}-${out[0].name}.png`;
+      const name = opts.floors === "stack" ? `${base}-${t("全部楼层")}.png` : `${base}-${out[0].name}.png`;
       ok = await saveFile(name, await canvasToPng(out[0].canvas), "image/png");
     } else {
       const files = await Promise.all(out.map(async (img, n) => ({
         name: `${String(n + 1).padStart(2, "0")}-${base}-${img.name}.png`,
         data: new Uint8Array(await (await canvasToPng(img.canvas)).arrayBuffer()),
       })));
-      ok = await saveFile(`${base}-楼层图片.zip`, makeZip(files), "application/zip");
+      ok = await saveFile(`${base}-${t("楼层图片")}.zip`, makeZip(files), "application/zip");
     }
     if (ok) {
       closeExportDialog();
       const skipped = list.length - chosen.length;
-      toast(`已导出${out.length > 1 ? ` ${out.length} 张图片` : "图片"}${skipped > 0 ? `（跳过 ${skipped} 个空楼层）` : ""}${downscaled ? "。内容太大，已自动降低清晰度" : ""}`);
+      toast((out.length > 1 ? t("已导出 {n} 张图片", { n: out.length }) : t("已导出图片")) + (skipped > 0 ? t("（跳过 {n} 个空楼层）", { n: skipped }) : "") + (downscaled ? t("。内容太大，已自动降低清晰度") : ""));
     }
   } catch (err) {
-    toast(`导出图片失败：${(err as Error).message}`, true);
+    toast(t("导出图片失败：{msg}", { msg: (err as Error).message }), true);
   } finally {
     go.disabled = false;
-    go.textContent = "导出";
+    go.textContent = t("导出");
   }
 });
 
@@ -2145,7 +2153,7 @@ function loadProject(p: ProjectFile) {
     renderLegend();
     selectEntry(legend[0].id);
   }
-  nameInput.value = p.name || "未命名关卡";
+  nameInput.value = p.name || t("未命名关卡");
   try { localStorage.setItem(NAME_KEY, nameInput.value); } catch { /* 忽略 */ }
   cam.zoom = Math.min(1e9, Math.max(1e-6, p.view.zoom));
   cam.centerOn(p.view.x, p.view.y, width / 2, height / 2);
@@ -2154,7 +2162,7 @@ function loadProject(p: ProjectFile) {
   redoStack.length = 0;
   imageStore.prune(usedImageIds());
   afterEdit();
-  toast(`已导入「${nameInput.value}」（${p.floors.length} 层）`);
+  toast(t("已导入「{name}」（{n} 层）", { name: nameInput.value, n: p.floors.length }));
 }
 
 const fileInput = $("file-import") as HTMLInputElement;
@@ -2165,7 +2173,7 @@ fileInput.addEventListener("change", async () => {
   try {
     loadProject(parseProject(await file.text()));
   } catch (err) {
-    toast(`导入失败：${(err as Error).message}`, true);
+    toast(t("导入失败：{msg}", { msg: (err as Error).message }), true);
   }
 });
 $("btn-export").addEventListener("click", () => void exportProject());
@@ -2177,7 +2185,7 @@ window.addEventListener("drop", async (e) => {
   const file = e.dataTransfer?.files?.[0];
   if (!file) return;
   if (file.type.startsWith("image/")) { void importImageFile(file, localPoint(e)); return; }
-  try { loadProject(parseProject(await file.text())); } catch (err) { toast(`导入失败：${(err as Error).message}`, true); }
+  try { loadProject(parseProject(await file.text())); } catch (err) { toast(t("导入失败：{msg}", { msg: (err as Error).message }), true); }
 });
 window.addEventListener("keydown", (e) => {
   if (!(e.ctrlKey || e.metaKey)) return;
@@ -2188,6 +2196,32 @@ window.addEventListener("keydown", (e) => {
   }
   else if (e.key === "o" || e.key === "O") { e.preventDefault(); fileInput.click(); }
 });
+
+// ---------------- 中英文切换 ----------------
+const langBtn = $("btn-lang");
+function applyLanguage() {
+  const l = getLang();
+  // 默认工程名跟着语言换
+  const wasDefault = ["未命名关卡", "Untitled level"].includes(nameInput.value.trim());
+  setLang(l);
+  if (wasDefault) { nameInput.value = t("未命名关卡"); try { localStorage.setItem(NAME_KEY, nameInput.value); } catch { /* 忽略 */ } }
+  langBtn.textContent = l === "zh" ? "EN" : "中文";
+  relabelOptions();
+  renderLegend();
+  renderFloors();
+  renderIconPalette();
+  renderIconLegend(true);
+  $("legend-toggle").textContent = legendPanel.classList.contains("collapsed") ? t("展开") : t("收起");
+  if (!exportDialog.hidden) updateExportSummary();
+  updateCursorCell(hover?.x ?? width / 2, hover?.y ?? height / 2);
+  requestRender();
+}
+langBtn.addEventListener("click", () => {
+  setLang(getLang() === "zh" ? "en" : "zh");
+  applyLanguage();
+  toast(getLang() === "zh" ? "已切换到中文" : "Switched to English");
+});
+applyLanguage();
 
 renderFloors();
 setSmooth(smooth);

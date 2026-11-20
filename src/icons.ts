@@ -22,7 +22,7 @@ export const ICONS = {
   trap: { label: "陷阱", color: "#c8364f", path: "M3 20h18M4.5 20l2.5-8.5 2.5 8.5M9.5 20 12 6l2.5 14M14.5 20l2.5-8.5 2.5 8.5" },
   save: { label: "记录点", color: "#2fa39a", path: "M6.5 21V3.5M6.5 4.5h11l-2.5 4 2.5 4h-11" },
   spawn: { label: "出生点", color: "#4a9a48", path: "M9 12a3 3 0 1 0 6 0a3 3 0 1 0-6 0M4 12a8 8 0 1 0 16 0a8 8 0 1 0-16 0" },
-  goal: { label: "终点", color: "#8f5ec7", path: "M8 4h8v5a4 4 0 0 1-8 0zM8 6H5.5a2.5 2.5 0 0 0 2.5 4M16 6h2.5a2.5 2.5 0 0 1-2.5 4M12 13v4M8 20.5h8M9.5 17h5" },
+  goal: { label: "终点/目标", color: "#8f5ec7", path: "M8 4h8v5a4 4 0 0 1-8 0zM8 6H5.5a2.5 2.5 0 0 0 2.5 4M16 6h2.5a2.5 2.5 0 0 1-2.5 4M12 13v4M8 20.5h8M9.5 17h5" },
   boss: { label: "Boss", color: "#7a1f3d", path: "M5 11a7 7 0 1 1 14 0v3l-2 1.5V19H7v-3.5L5 14zM9.5 11.5v.01M14.5 11.5v.01M10.5 19v-2M13.5 19v-2" },
   enemy: { label: "敌人", color: "#c8364f", path: "M5 5l11 11M19 5 8 16M14 18l4-4M10 18l-4-4M17 17l2.5 2.5M7 17l-2.5 2.5" },
   npc: { label: "NPC/对话", color: "#3f7fc8", path: "M4 5h16v11h-9l-4 3.5V16H4zM8 9h8M8 12.5h5" },
