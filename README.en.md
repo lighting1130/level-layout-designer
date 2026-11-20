@@ -16,8 +16,6 @@ A layout drawing tool for game level design. It helps level designers sketch, it
 
 👉 **[Open Level Layout Designer](https://lighting1130.github.io/level-layout-designer/)** (GitHub Pages)
 
-Backup link: [online version on claude.ai](https://claude.ai/artifact/DDRPnUQsS3sF98zEyHz8RZ)
-
 ![Overview](docs/images/overview-en.png)
 
 > Anyone can open the GitHub Pages link. Every merge to `main` republishes it automatically; refresh after a few minutes to get the latest version.
