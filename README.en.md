@@ -45,7 +45,7 @@ It is a single self-contained HTML file with all the code inside. You can send i
    - **Export** saves a `.json` project file. Send it to someone and they can **Import** it to keep editing (also the way to move to another computer or browser)
    - **Export image** (`Ctrl+Shift+S`) saves PNGs: one per level (in a ZIP) or all levels in one tall image, with the color and icon key along the bottom
 
-![Exported image](docs/images/export.png)
+![Exported image](docs/images/export-en.png)
 
 ## Features
 
