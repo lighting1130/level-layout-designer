@@ -1,6 +1,7 @@
 import { Camera } from "./camera";
 import { CELL_SIZE, SUBDIVISION, brushLevel, drawBackground, drawGrid, finestLevel, levelStep } from "./grid";
 import { CellLayer, type Change } from "./cells";
+import { MAX_SHAPE_CELLS, SHAPE_LABELS, TooManyCellsError, arcPoints, rasterizeFill, rasterizeStroke, shapePolygon, type CellIJ, type Pt, type ShapeKind } from "./shapes";
 import { PROJECT_FORMAT, PROJECT_VERSION, parseProject, projectFileName, type ProjectFile } from "./project";
 
 const canvas = document.getElementById("canvas") as HTMLCanvasElement;
@@ -9,6 +10,7 @@ const $ = (id: string) => document.getElementById(id)!;
 const hudCell = $("hud-cell");
 const hudZoom = $("hud-zoom");
 const hudBrush = $("hud-brush");
+const hintEl = $("hint");
 
 const cam = new Camera();
 const layer = new CellLayer();
@@ -172,12 +174,14 @@ function hslToHex(h: number, s: number, l: number): string {
 }
 
 // ---------------- 工具 ----------------
-type Tool = "brush" | "eraser" | "hand";
+type Tool = "brush" | "eraser" | "arc" | "shape" | "hand";
 let tool: Tool = "brush";
 let spaceDown = false;
 
 function setTool(t: Tool) {
+  if (t !== tool) cancelDraft();
   tool = t;
+  shapeOptions.hidden = t !== "shape";
   for (const b of document.querySelectorAll<HTMLButtonElement>(".tool")) {
     b.setAttribute("aria-pressed", String(b.dataset.tool === t));
   }
@@ -188,6 +192,20 @@ function setTool(t: Tool) {
 for (const b of document.querySelectorAll<HTMLButtonElement>(".tool")) {
   b.addEventListener("click", () => setTool(b.dataset.tool as Tool));
 }
+
+// 图形选项：类型下拉框 + 是否填充
+const shapeOptions = $("shape-options");
+const shapeKindSel = $("shape-kind") as HTMLSelectElement;
+const shapeFill = $("shape-fill") as HTMLInputElement;
+for (const [k, label] of Object.entries(SHAPE_LABELS)) {
+  const o = document.createElement("option");
+  o.value = k;
+  o.textContent = label;
+  shapeKindSel.appendChild(o);
+}
+shapeKindSel.value = "rect";
+shapeKindSel.addEventListener("change", () => { setTool("shape"); shapeKindSel.blur(); });
+shapeFill.addEventListener("change", () => { shapeFill.blur(); setTool("shape"); updateDraftCells(); requestRender(); });
 
 // ---------------- 撤销 / 重做 ----------------
 const undoStack: Change[] = [];
@@ -273,13 +291,13 @@ function cellAt(sx: number, sy: number, k: number) {
 }
 
 function drawHover() {
-  if (!hover || mode === "pan" || mode === "pinch" || tool === "hand" || spaceDown) return;
+  if (!hover || draft || mode === "pan" || mode === "pinch" || tool === "hand" || spaceDown) return;
   const c = cellAt(hover.x, hover.y, activeLevel());
   const s = levelStep(c.k);
   const p0 = cam.worldToScreen(c.i * s, c.j * s);
   const p1 = cam.worldToScreen((c.i + 1) * s, (c.j + 1) * s);
   const x0 = Math.round(p0.x), y0 = Math.round(p0.y), x1 = Math.round(p1.x), y1 = Math.round(p1.y);
-  if (tool === "brush") {
+  if (tool !== "eraser") {
     ctx.globalAlpha = 0.35;
     ctx.fillStyle = currentColor;
     ctx.fillRect(x0, y0, x1 - x0, y1 - y0);
@@ -296,7 +314,11 @@ function frame() {
     drawBackground(ctx, width, height);
     layer.draw(ctx, cam, width, height);
     drawGrid(ctx, cam, width, height);
+    drawDraft();
     drawHover();
+    const hint = draftHint();
+    hintEl.textContent = hint;
+    hintEl.hidden = !hint;
     hudZoom.textContent = formatZoom(cam.zoom);
     hudBrush.textContent = `笔刷: ${formatCellSize(activeLevel())}`;
   }
@@ -332,7 +354,7 @@ function updateCursorCell(sx: number, sy: number) {
 }
 
 // ---------------- 指针：涂色 / 平移 / 双指缩放 ----------------
-type Mode = "none" | "paint" | "pan" | "pinch";
+type Mode = "none" | "paint" | "draw" | "pan" | "pinch";
 let mode: Mode = "none";
 const pointers = new Map<number, { x: number; y: number }>();
 let pinchDist = 0;
@@ -340,7 +362,7 @@ let stroke: { change: Change; k: number; last: { x: number; y: number } } | null
 
 /** 一笔之内锁定格子层级，避免中途缩放导致粗细混杂 */
 function activeLevel() {
-  return stroke ? stroke.k : brushLevel(cam.zoom);
+  return stroke ? stroke.k : draft ? draft.k : brushLevel(cam.zoom);
 }
 
 function localPoint(e: { clientX: number; clientY: number }) {
@@ -377,6 +399,123 @@ function endStroke() {
   }
 }
 
+// ---------------- 弧线与几何图形 ----------------
+/**
+ * 弧线：按下设起点，拖到终点松开（或点击起点、再点击终点），
+ * 然后移动鼠标调整弯曲程度，再点击确认。Esc 取消。
+ * 图形：从一个角拖到对角，松开即生成；按住 Shift 画正方形/正圆/正多边形。
+ * 起点、终点都会吸附到格子中心；结果按当前笔刷层级逐格涂色，一次可撤销。
+ */
+interface Draft {
+  kind: "arc" | ShapeKind;
+  k: number;
+  a: Pt;
+  b: Pt;
+  bend: Pt | null;
+  /** drag: 正在拖终点；pickEnd: 等待点击终点；bend: 调整弯曲；bendDrag: 按住调整弯曲 */
+  phase: "drag" | "pickEnd" | "bend" | "bendDrag";
+  constrain: boolean;
+  cells: CellIJ[];
+  tooMany: boolean;
+}
+let draft: Draft | null = null;
+
+function snapToCellCenter(sx: number, sy: number, k: number): Pt {
+  const w = cam.screenToWorld(sx, sy);
+  const s = levelStep(k);
+  return { x: (Math.floor(w.x / s) + 0.5) * s, y: (Math.floor(w.y / s) + 0.5) * s };
+}
+
+function draftGeometry(d: Draft): { pts: Pt[]; closed: boolean } {
+  if (d.kind === "arc") return { pts: d.bend ? arcPoints(d.a, d.b, d.bend) : [d.a, d.b], closed: false };
+  return shapePolygon(d.kind, d.a, d.b, d.constrain);
+}
+
+function updateDraftCells() {
+  if (!draft) return;
+  const s = levelStep(draft.k);
+  const g = draftGeometry(draft);
+  try {
+    draft.cells = draft.kind !== "arc" && draft.kind !== "line" && shapeFill.checked && g.closed
+      ? rasterizeFill(g.pts, s)
+      : rasterizeStroke(g.pts, g.closed, s);
+    draft.tooMany = false;
+  } catch (err) {
+    if (!(err instanceof TooManyCellsError)) throw err;
+    draft.cells = [];
+    draft.tooMany = true;
+  }
+}
+
+function commitDraft() {
+  if (!draft) return;
+  if (draft.tooMany) {
+    toast(`图形太大：超过 ${MAX_SHAPE_CELLS.toLocaleString()} 个格子。请缩小视图（笔刷格子变大）后再画。`, true);
+  } else {
+    const change: Change = new Map();
+    for (const c of draft.cells) layer.paint(draft.k, c.i, c.j, currentColor, change);
+    commit(change);
+  }
+  draft = null;
+  requestRender();
+}
+
+function cancelDraft() {
+  if (draft) { draft = null; requestRender(); }
+}
+
+function drawDraft() {
+  if (!draft) return;
+  const s = levelStep(draft.k);
+  ctx.globalAlpha = 0.6;
+  ctx.fillStyle = currentColor;
+  for (const c of draft.cells) {
+    const x0 = Math.round((c.i * s - cam.x) * cam.zoom), y0 = Math.round((c.j * s - cam.y) * cam.zoom);
+    const x1 = Math.round(((c.i + 1) * s - cam.x) * cam.zoom), y1 = Math.round(((c.j + 1) * s - cam.y) * cam.zoom);
+    if (x1 < 0 || y1 < 0 || x0 > width || y0 > height) continue;
+    ctx.fillRect(x0, y0, Math.max(1, x1 - x0), Math.max(1, y1 - y0));
+  }
+  ctx.globalAlpha = 1;
+  // 精确的几何线 + 起点/终点/控制点标记
+  const g = draftGeometry(draft);
+  ctx.strokeStyle = draft.tooMany ? "#ff6b6b" : "#ffffff";
+  ctx.lineWidth = 1.5;
+  ctx.setLineDash([5, 4]);
+  ctx.beginPath();
+  g.pts.forEach((p, n) => {
+    const q = cam.worldToScreen(p.x, p.y);
+    n ? ctx.lineTo(q.x, q.y) : ctx.moveTo(q.x, q.y);
+  });
+  if (g.closed) ctx.closePath();
+  ctx.stroke();
+  ctx.setLineDash([]);
+  const dot = (p: Pt, fill: string) => {
+    const q = cam.worldToScreen(p.x, p.y);
+    ctx.beginPath();
+    ctx.arc(q.x, q.y, 5, 0, Math.PI * 2);
+    ctx.fillStyle = fill;
+    ctx.fill();
+    ctx.strokeStyle = "#1e2127";
+    ctx.lineWidth = 2;
+    ctx.stroke();
+  };
+  if (draft.kind === "arc") {
+    dot(draft.a, "#7ac878");
+    dot(draft.b, "#e86b6b");
+    if (draft.bend) dot(draft.bend, "#7aa2f7");
+  }
+}
+
+function draftHint(): string {
+  if (tool === "arc") {
+    if (!draft) return "弧线：按下设起点，拖到终点松开";
+    if (draft.phase === "pickEnd" || draft.phase === "drag") return "弧线：选择终点";
+    return "弧线：移动鼠标调整弯曲，点击确认（Esc 取消）";
+  }
+  if (tool === "shape") return draft ? "松开生成；按住 Shift 画正图形" : "图形：从一个角拖到对角";
+  return "";
+}
+
 canvas.addEventListener("pointerdown", (e) => {
   canvas.setPointerCapture(e.pointerId);
   const p = localPoint(e);
@@ -384,6 +523,7 @@ canvas.addEventListener("pointerdown", (e) => {
   hover = p;
 
   if (pointers.size === 2) {
+    if (mode === "draw") cancelDraft();
     // 第二根手指落下：取消当前笔画（已画部分保留且可撤销），改为双指平移缩放
     endStroke();
     mode = "pinch";
@@ -397,6 +537,20 @@ canvas.addEventListener("pointerdown", (e) => {
   if (wantsPan) {
     mode = "pan";
     canvas.classList.add("panning");
+  } else if (e.button === 0 && (tool === "arc" || tool === "shape")) {
+    mode = "draw";
+    const k = draft ? draft.k : brushLevel(cam.zoom);
+    if (draft && draft.phase === "pickEnd") {
+      draft.b = snapToCellCenter(p.x, p.y, k);
+      draft.phase = "drag";
+    } else if (draft && draft.phase === "bend") {
+      draft.bend = cam.screenToWorld(p.x, p.y);
+      draft.phase = "bendDrag";
+    } else {
+      const a = snapToCellCenter(p.x, p.y, k);
+      draft = { kind: tool === "arc" ? "arc" : (shapeKindSel.value as ShapeKind), k, a, b: a, bend: null, phase: "drag", constrain: e.shiftKey, cells: [], tooMany: false };
+    }
+    updateDraftCells();
   } else if (e.button === 0) {
     mode = "paint";
     stroke = { change: new Map(), k: brushLevel(cam.zoom), last: p };
@@ -409,6 +563,15 @@ canvas.addEventListener("pointermove", (e) => {
   const p = localPoint(e);
   hover = p;
   updateCursorCell(p.x, p.y);
+  // 弧线调整弯曲 / 选择终点阶段：鼠标不用按住
+  if (draft && (draft.phase === "bend" || draft.phase === "bendDrag")) {
+    draft.bend = cam.screenToWorld(p.x, p.y);
+    updateDraftCells();
+  } else if (draft && (draft.phase === "pickEnd" || (draft.phase === "drag" && mode === "draw"))) {
+    draft.b = snapToCellCenter(p.x, p.y, draft.k);
+    draft.constrain = e.shiftKey;
+    updateDraftCells();
+  }
   const prev = pointers.get(e.pointerId);
   if (!prev) { requestRender(); return; }
 
@@ -432,6 +595,20 @@ canvas.addEventListener("pointermove", (e) => {
 
 function endPointer(e: PointerEvent) {
   pointers.delete(e.pointerId);
+  if (pointers.size === 0 && mode === "draw" && draft) {
+    if (draft.kind !== "arc" || draft.phase === "bendDrag") {
+      commitDraft();
+    } else if (draft.phase === "drag") {
+      const same = draft.a.x === draft.b.x && draft.a.y === draft.b.y;
+      if (same) {
+        draft.phase = "pickEnd"; // 只点了一下：等待点击终点
+      } else {
+        draft.phase = "bend";
+        draft.bend = { x: (draft.a.x + draft.b.x) / 2, y: (draft.a.y + draft.b.y) / 2 };
+        updateDraftCells();
+      }
+    }
+  }
   if (pointers.size === 0) {
     endStroke();
     mode = "none";
@@ -493,12 +670,16 @@ window.addEventListener("keydown", (e) => {
     if (!spaceDown) { spaceDown = true; canvas.classList.add("space"); requestRender(); }
     return;
   }
+  if (e.key === "Escape") { cancelDraft(); return; }
+  if (e.key === "Enter" && draft && draft.phase === "bend") { commitDraft(); return; }
   if (e.key === "0" || e.key === "Home") resetView();
   else if (e.key === "+" || e.key === "=") zoomCenter(1.25);
   else if (e.key === "-" || e.key === "_") zoomCenter(0.8);
   else if (e.key === "b" || e.key === "B") setTool("brush");
   else if (e.key === "e" || e.key === "E") setTool("eraser");
   else if (e.key === "h" || e.key === "H") setTool("hand");
+  else if (e.key === "a" || e.key === "A") setTool("arc");
+  else if (e.key === "g" || e.key === "G") setTool("shape");
   else if (/^[1-9]$/.test(e.key)) {
     const entry = legend[Number(e.key) - 1];
     if (entry) selectEntry(entry.id);
