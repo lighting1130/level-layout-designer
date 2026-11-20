@@ -77,8 +77,8 @@ export function drawVector(ctx: CanvasRenderingContext2D, cam: Camera, v: Vector
   ctx.globalAlpha = 1;
 }
 
-export function drawVectors(ctx: CanvasRenderingContext2D, cam: Camera, list: VectorShape[]) {
-  for (const v of list) drawVector(ctx, cam, v);
+export function drawVectors(ctx: CanvasRenderingContext2D, cam: Camera, list: VectorShape[], alpha = 1) {
+  for (const v of list) drawVector(ctx, cam, v, alpha);
 }
 
 /** 图形轮廓的采样点（用于命中测试） */

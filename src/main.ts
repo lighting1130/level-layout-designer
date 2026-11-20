@@ -3,7 +3,7 @@ import { CELL_SIZE, SUBDIVISION, brushLevel, drawBackground, drawGrid, finestLev
 import { CellLayer, type Change } from "./cells";
 import { MAX_SHAPE_CELLS, SHAPE_LABELS, TooManyCellsError, arcPoints, rasterizeFill, rasterizeThickStroke, clampSides, shapePolygon, type CellIJ, type Pt, type ShapeKind } from "./shapes";
 import { drawVector, drawVectors, hitVector, isClosed, sanitizeVectors, type VectorShape } from "./vectors";
-import { PROJECT_FORMAT, PROJECT_VERSION, parseProject, projectFileName, type ProjectFile } from "./project";
+import { PROJECT_FORMAT, PROJECT_VERSION, floorName, parseProject, projectFileName, sanitizeFloors, type FloorData, type ProjectFile } from "./project";
 
 const canvas = document.getElementById("canvas") as HTMLCanvasElement;
 const ctx = canvas.getContext("2d")!;
@@ -11,11 +11,13 @@ const $ = (id: string) => document.getElementById(id)!;
 const hudCell = $("hud-cell");
 const hudZoom = $("hud-zoom");
 const hudBrush = $("hud-brush");
+const hudFloor = $("hud-floor");
 const hintEl = $("hint");
 const currentSwatch = $("current-swatch");
 
 const cam = new Camera();
-const layer = new CellLayer();
+/** 当前楼层的格子层（切换楼层时指向那一层的数据） */
+let layer = new CellLayer();
 let width = 0;
 let height = 0;
 let dirty = true;
@@ -72,9 +74,11 @@ function selectEntry(id: number) {
 /** 修改某个颜色时，把画布上（以及撤销记录里）用这个颜色的格子一起改掉，保持图例和画面一致 */
 function recolor(from: string, to: string) {
   if (from === to) return;
-  layer.recolor(from, to);
-  // 平滑图形对象在当前列表和撤销记录之间共享，统一改一次即可
-  const shapes = new Set<VectorShape>(vectors);
+  syncFloor();
+  for (const f of floors) f.layer.recolor(from, to);
+  // 平滑图形对象在各楼层和撤销记录之间共享，统一改一次即可
+  const shapes = new Set<VectorShape>();
+  for (const f of floors) f.vectors.forEach((v) => shapes.add(v));
   for (const stack of [undoStack, redoStack]) for (const e of stack) e.vectors?.forEach((v) => shapes.add(v));
   for (const v of shapes) if (v.color === from) v.color = to;
   for (const stack of [undoStack, redoStack]) {
@@ -283,17 +287,121 @@ $("stroke-inc").addEventListener("click", () => strokeStep(1));
 
 // ---------------- 撤销 / 重做 ----------------
 /** 一步撤销：格子的修改记录 + （若有改动）修改前的平滑图形列表 */
-interface Entry { cells: Change; vectors?: VectorShape[] }
+interface Entry { floor: number; cells: Change; vectors?: VectorShape[] }
 const undoStack: Entry[] = [];
 const redoStack: Entry[] = [];
-/** 平滑图形层（画在格子和网格之上） */
+/** 当前楼层的平滑图形（画在格子和网格之上）；切换楼层时与 floors 同步 */
 let vectors: VectorShape[] = [];
+
+// ---------------- 楼层 ----------------
+interface Floor { level: number; layer: CellLayer; vectors: VectorShape[] }
+/** 按楼层号从高到低排列 */
+let floors: Floor[] = [{ level: 1, layer, vectors }];
+let currentLevel = 1;
+const currentFloor = () => floors.find((f) => f.level === currentLevel)!;
+/** 把当前楼层的 vectors 写回楼层对象 */
+function syncFloor() { currentFloor().vectors = vectors; }
+
+function switchFloor(level: number) {
+  if (!floors.some((f) => f.level === level)) return;
+  if (level === currentLevel) return;
+  endStroke();
+  cancelDraft();
+  syncFloor();
+  currentLevel = level;
+  layer = currentFloor().layer;
+  vectors = currentFloor().vectors;
+  renderFloors();
+  save();
+  requestRender();
+}
+
+function addFloor(dir: 1 | -1) {
+  syncFloor();
+  const levels = floors.map((f) => f.level);
+  let level = dir > 0 ? Math.max(...levels) + 1 : Math.min(...levels) - 1;
+  if (level === 0) level = dir;
+  floors.push({ level, layer: new CellLayer(), vectors: [] });
+  floors.sort((a, b) => b.level - a.level);
+  switchFloor(level);
+  renderFloors();
+  save();
+  toast(`已添加${floorName(level)}`);
+}
+
+let deleteArmed = 0;
+function deleteCurrentFloor(btn: HTMLButtonElement) {
+  if (floors.length <= 1) return;
+  // 删除不可撤销：第一次点击变成“确认删除”，3 秒内再点一次才删除
+  if (!deleteArmed) {
+    btn.textContent = "确认删除？";
+    btn.classList.add("danger");
+    deleteArmed = window.setTimeout(() => { deleteArmed = 0; renderFloors(); }, 3000);
+    return;
+  }
+  clearTimeout(deleteArmed);
+  deleteArmed = 0;
+  const removed = currentLevel;
+  floors = floors.filter((f) => f.level !== removed);
+  for (const stack of [undoStack, redoStack]) {
+    for (let n = stack.length - 1; n >= 0; n--) if (stack[n].floor === removed) stack.splice(n, 1);
+  }
+  const next = floors.reduce((best, f) => (Math.abs(f.level - removed) < Math.abs(best.level - removed) ? f : best));
+  currentLevel = next.level;
+  layer = next.layer;
+  vectors = next.vectors;
+  renderFloors();
+  afterEdit();
+  toast(`已删除${floorName(removed)}`);
+}
+
+/** 非当前楼层的不透明度：每远一层乘 0.4，太淡就不画 */
+const FLOOR_FADE = 0.4;
+const floorAlpha = (level: number) => {
+  // 楼层号跳过 0，所以 1 层和 -1 层相邻
+  const idx = (l: number) => (l > 0 ? l - 1 : l);
+  return Math.pow(FLOOR_FADE, Math.abs(idx(level) - idx(currentLevel)));
+};
+let showOtherFloors = true;
+
+const floorList = $("floor-list");
+function renderFloors() {
+  floorList.replaceChildren();
+  for (const f of floors) {
+    const b = document.createElement("button");
+    b.className = "floor-row";
+    b.setAttribute("aria-pressed", String(f.level === currentLevel));
+    const count = f.layer.size + (f.level === currentLevel ? vectors.length : f.vectors.length);
+    const name = document.createElement("span");
+    name.textContent = floorName(f.level);
+    const meta = document.createElement("span");
+    meta.className = "floor-meta";
+    meta.textContent = f.level === currentLevel ? "当前" : count ? String(count) : "";
+    b.title = `${floorName(f.level)}：${count} 个格子/图形（PageUp / PageDown 切换）`;
+    b.append(name, meta);
+    b.addEventListener("click", () => switchFloor(f.level));
+    floorList.appendChild(b);
+  }
+  const del = $("floor-del") as HTMLButtonElement;
+  del.disabled = floors.length <= 1;
+  if (!deleteArmed) { del.textContent = "删除当前层"; del.classList.remove("danger"); }
+}
+$("floor-add-up").addEventListener("click", () => addFloor(1));
+$("floor-add-down").addEventListener("click", () => addFloor(-1));
+$("floor-del").addEventListener("click", (e) => deleteCurrentFloor(e.currentTarget as HTMLButtonElement));
+const showOthersInput = $("floor-show-others") as HTMLInputElement;
+showOthersInput.addEventListener("change", () => { showOtherFloors = showOthersInput.checked; showOthersInput.blur(); requestRender(); });
+function stepFloor(dir: 1 | -1) {
+  const idx = floors.findIndex((f) => f.level === currentLevel);
+  const next = floors[idx - dir]; // 列表从高到低
+  if (next) switchFloor(next.level);
+}
 const btnUndo = $("btn-undo") as HTMLButtonElement;
 const btnRedo = $("btn-redo") as HTMLButtonElement;
 
 function commit(change: Change, vectorsBefore?: VectorShape[]) {
   if (change.size === 0 && !vectorsBefore) return;
-  undoStack.push({ cells: change, vectors: vectorsBefore });
+  undoStack.push({ floor: currentLevel, cells: change, vectors: vectorsBefore });
   if (undoStack.length > 200) undoStack.shift();
   redoStack.length = 0;
   afterEdit();
@@ -311,11 +419,14 @@ function redo() {
   afterEdit();
 }
 function applyEntry(e: Entry): Entry {
-  const inv: Entry = { cells: layer.apply(e.cells) };
+  // 撤销/重做发生在别的楼层时，先切换过去，让用户看到变化
+  if (e.floor !== currentLevel) switchFloor(e.floor);
+  const inv: Entry = { floor: e.floor, cells: layer.apply(e.cells) };
   if (e.vectors) { inv.vectors = vectors; vectors = e.vectors; }
   return inv;
 }
 function afterEdit() {
+  renderFloors();
   btnUndo.disabled = undoStack.length === 0;
   btnRedo.disabled = redoStack.length === 0;
   save();
@@ -334,13 +445,28 @@ $("btn-clear").addEventListener("click", () => {
 // ---------------- 本地保存（刷新页面不丢） ----------------
 const STORAGE_KEY = "level-layout-designer.cells.v1";
 const VECTOR_KEY = "level-layout-designer.vectors.v1";
+const FLOORS_KEY = "level-layout-designer.floors.v1";
+function floorData(): FloorData[] {
+  syncFloor();
+  return floors.map((f) => ({ level: f.level, cells: f.layer.toJSON(), vectors: f.vectors }));
+}
+function loadFloors(data: FloorData[], current: number) {
+  floors = sanitizeFloors(data).map((f) => {
+    const l = new CellLayer();
+    l.load(f.cells);
+    return { level: f.level, layer: l, vectors: f.vectors };
+  });
+  const cur = floors.find((f) => f.level === current) ?? floors.find((f) => f.level === 1) ?? floors[0];
+  currentLevel = cur.level;
+  layer = cur.layer;
+  vectors = cur.vectors;
+}
 let saveTimer = 0;
 function flushSave() {
   clearTimeout(saveTimer);
   saveTimer = 0;
   try {
-    localStorage.setItem(STORAGE_KEY, JSON.stringify(layer.toJSON()));
-    localStorage.setItem(VECTOR_KEY, JSON.stringify(vectors));
+    localStorage.setItem(FLOORS_KEY, JSON.stringify({ current: currentLevel, floors: floorData() }));
   } catch { /* 存储不可用时忽略 */ }
 }
 function save() {
@@ -350,10 +476,16 @@ function save() {
 // 关闭或刷新页面前立即保存，避免丢失最后一笔
 window.addEventListener("pagehide", () => { if (saveTimer) flushSave(); });
 try {
-  const raw = localStorage.getItem(STORAGE_KEY);
-  if (raw) layer.load(JSON.parse(raw));
-  const rawV = localStorage.getItem(VECTOR_KEY);
-  if (rawV) vectors = sanitizeVectors(JSON.parse(rawV));
+  const rawF = localStorage.getItem(FLOORS_KEY);
+  if (rawF) {
+    const d = JSON.parse(rawF);
+    loadFloors(d.floors, d.current);
+  } else {
+    // 旧版本只有一层：迁移为第一层
+    const raw = localStorage.getItem(STORAGE_KEY);
+    const rawV = localStorage.getItem(VECTOR_KEY);
+    loadFloors([{ level: 1, cells: raw ? JSON.parse(raw) : [], vectors: rawV ? sanitizeVectors(JSON.parse(rawV)) : [] }], 1);
+  }
 } catch { /* 忽略损坏或不可用的存储 */ }
 
 // ---------------- 渲染 ----------------
@@ -416,8 +548,19 @@ function frame() {
   if (dirty) {
     dirty = false;
     drawBackground(ctx, width, height);
+    // 其他楼层按距离变淡：先画远的，再画近的，当前层最后、完全不透明
+    const others = showOtherFloors
+      ? floors.filter((f) => f.level !== currentLevel && floorAlpha(f.level) >= 0.03)
+          .sort((a, b) => floorAlpha(a.level) - floorAlpha(b.level))
+      : [];
+    for (const f of others) {
+      ctx.globalAlpha = floorAlpha(f.level);
+      f.layer.draw(ctx, cam, width, height);
+    }
+    ctx.globalAlpha = 1;
     layer.draw(ctx, cam, width, height);
     drawGrid(ctx, cam, width, height);
+    for (const f of others) drawVectors(ctx, cam, f.vectors, floorAlpha(f.level));
     drawVectors(ctx, cam, vectors);
     drawDraft();
     drawHover();
@@ -427,6 +570,7 @@ function frame() {
     hintEl.hidden = !hint;
     hudZoom.textContent = formatZoom(cam.zoom);
     hudBrush.textContent = `笔刷: ${formatCellSize(activeLevel())}`;
+    hudFloor.textContent = floorName(currentLevel);
   }
   requestAnimationFrame(frame);
 }
@@ -818,6 +962,8 @@ window.addEventListener("keydown", (e) => {
   }
   if (e.key === "Escape") { cancelDraft(); return; }
   if (e.key === "Enter" && draft && draft.phase === "bend") { commitDraft(); return; }
+  if (e.key === "PageUp") { e.preventDefault(); stepFloor(1); return; }
+  if (e.key === "PageDown") { e.preventDefault(); stepFloor(-1); return; }
   if (e.key === "0" || e.key === "Home") resetView();
   else if (e.key === "+" || e.key === "=") zoomCenter(1.25);
   else if (e.key === "-" || e.key === "_") zoomCenter(0.8);
@@ -876,8 +1022,8 @@ function buildProject(): ProjectFile {
     grid: { cellSize: CELL_SIZE, subdivision: SUBDIVISION },
     view: { x: cam.x + width / 2 / cam.zoom, y: cam.y + height / 2 / cam.zoom, zoom: cam.zoom },
     legend: legend.map(({ name, color }) => ({ name, color })),
-    cells: layer.toJSON(),
-    vectors,
+    currentFloor: currentLevel,
+    floors: floorData(),
   };
 }
 
@@ -893,7 +1039,7 @@ async function exportProject() {
     if (downloads) {
       try {
         await downloads.save({ filename, data });
-        toast(`已导出 ${filename}（${project.cells.length} 个格子，${project.vectors.length} 个平滑图形）`);
+        toast(`已导出 ${filename}（${project.floors.length} 层）`);
       } catch (err) {
         const code = (err as { code?: string })?.code;
         if (code === "declined") return;
@@ -911,12 +1057,14 @@ async function exportProject() {
   a.click();
   a.remove();
   setTimeout(() => URL.revokeObjectURL(url), 1000);
-  toast(`已导出 ${filename}（${project.cells.length} 个格子，${project.vectors.length} 个平滑图形）`);
+  toast(`已导出 ${filename}（${project.floors.length} 层）`);
 }
 
 function loadProject(p: ProjectFile) {
-  layer.load(p.cells);
-  vectors = p.vectors;
+  endStroke();
+  cancelDraft();
+  loadFloors(p.floors, p.currentFloor);
+  renderFloors();
   if (p.legend.length) {
     legend = p.legend.map((e) => ({ ...e, id: nextId++ }));
     saveLegend();
@@ -931,7 +1079,7 @@ function loadProject(p: ProjectFile) {
   undoStack.length = 0;
   redoStack.length = 0;
   afterEdit();
-  toast(`已导入「${nameInput.value}」（${p.cells.length} 个格子，${p.vectors.length} 个平滑图形）`);
+  toast(`已导入「${nameInput.value}」（${p.floors.length} 层）`);
 }
 
 const fileInput = $("file-import") as HTMLInputElement;
@@ -961,6 +1109,7 @@ window.addEventListener("keydown", (e) => {
   else if (e.key === "o" || e.key === "O") { e.preventDefault(); fileInput.click(); }
 });
 
+renderFloors();
 setSmooth(smooth);
 setTool("brush");
 renderLegend();

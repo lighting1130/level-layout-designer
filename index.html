@@ -19,7 +19,7 @@
       <div class="group">
         <button id="btn-undo" title="撤销 (Ctrl+Z)">撤销</button>
         <button id="btn-redo" title="重做 (Ctrl+Shift+Z)">重做</button>
-        <button id="btn-clear" title="清空画布（可撤销）">清空</button>
+        <button id="btn-clear" title="清空当前楼层（可撤销）">清空</button>
       </div>
     </div>
     <nav class="toolcol" id="toolcol" aria-label="工具">
@@ -31,6 +31,16 @@
       <div class="col-sep"></div>
       <div class="current-color" title="当前颜色（在右侧颜色说明里切换）"><span id="current-swatch"></span></div>
     </nav>
+    <section class="floors" id="floors" aria-label="楼层">
+      <div class="floors-head">
+        <strong>楼层</strong>
+        <label class="check" title="是否半透明显示其他楼层"><input id="floor-show-others" type="checkbox" checked /> 显示其他层</label>
+      </div>
+      <button id="floor-add-up" class="floor-add" title="在最上面加一层">+ 上加一层</button>
+      <div id="floor-list" class="floor-list"></div>
+      <button id="floor-add-down" class="floor-add" title="在最下面加一层（地下层）">+ 下加一层</button>
+      <button id="floor-del" class="floor-del" title="删除当前楼层（不可撤销）">删除当前层</button>
+    </section>
     <div class="tool-options" id="tool-options" hidden>
       <div id="shape-options" class="opt-row" hidden>
         <label class="opt-label" for="shape-kind">图形</label>
@@ -78,6 +88,7 @@
     <div class="hint" id="hint" hidden></div>
     <div class="toast" id="toast" role="status" aria-live="polite" hidden></div>
     <div class="hud">
+      <span id="hud-floor">第一层</span>
       <span id="hud-brush">笔刷: 1 格</span>
       <span id="hud-cell">格子: 0, 0</span>
       <span id="hud-zoom">100%</span>
