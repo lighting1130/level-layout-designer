@@ -18,6 +18,8 @@ export interface VectorShape {
   sides?: number;
   /** 箭头（弧线和直线，可选） */
   arrow?: ArrowMode;
+  /** 顺时针旋转了几个 90°（1–3，框选旋转时设置；三角形、六边形等方向有关的图形用） */
+  rot?: number;
 }
 
 const KINDS = new Set(["arc", "line", "rect", "ellipse", "triangle", "diamond", "hexagon", "polygon"]);
@@ -35,6 +37,7 @@ export function sanitizeVectors(list: unknown): VectorShape[] {
       constrain: !!v.constrain, color: v.color.toLowerCase(), width: v.width, fill: !!v.fill,
       ...(v.kind === "polygon" ? { sides: clampSides(Number(v.sides)) } : {}),
       ...(!isClosed(v) && isArrowMode(v.arrow) && v.arrow !== "none" ? { arrow: v.arrow } : {}),
+      ...(isClosed(v) && v.kind !== "ellipse" && [1, 2, 3].includes(v.rot) ? { rot: v.rot } : {}),
     }));
 }
 
@@ -60,7 +63,7 @@ function tracePath(ctx: CanvasRenderingContext2D, cam: Camera, v: VectorShape) {
     ctx.ellipse(c.x, c.y, (w / 2) * cam.zoom, (h / 2) * cam.zoom, 0, 0, Math.PI * 2);
     return;
   }
-  const { pts, closed } = shapePolygon(v.kind, v.a, v.b, v.constrain, v.sides);
+  const { pts, closed } = vectorPolygon(v);
   pts.forEach((p, n) => { const q = S(p); n ? ctx.lineTo(q.x, q.y) : ctx.moveTo(q.x, q.y); });
   if (closed) ctx.closePath();
 }
@@ -97,7 +100,40 @@ export function drawVectors(ctx: CanvasRenderingContext2D, cam: Camera, list: Ve
 /** 图形轮廓的采样点（用于命中测试） */
 function outline(v: VectorShape): { pts: Pt[]; closed: boolean } {
   if (v.kind === "arc") return { pts: v.bend ? arcPoints(v.a, v.b, v.bend) : [v.a, v.b], closed: false };
-  return shapePolygon(v.kind, v.a, v.b, v.constrain, v.sides);
+  return vectorPolygon(v);
+}
+
+/**
+ * 多边形类图形的顶点。旋转过的图形：a、b 给出的是旋转后的外框，
+ * 先在“转回去”的外框里生成图形，再绕中心顺时针转 rot × 90°。
+ */
+function vectorPolygon(v: VectorShape): { pts: Pt[]; closed: boolean } {
+  const kind = v.kind as ShapeKind;
+  const q = v.rot ?? 0;
+  if (!q) return shapePolygon(kind, v.a, v.b, v.constrain, v.sides);
+  const { x0, y0, w, h } = shapeBox(v.a, v.b, v.constrain);
+  const cx = x0 + w / 2, cy = y0 + h / 2;
+  const [bw, bh] = q % 2 ? [h, w] : [w, h];
+  const base = shapePolygon(kind, { x: cx - bw / 2, y: cy - bh / 2 }, { x: cx + bw / 2, y: cy + bh / 2 }, false, v.sides);
+  return { pts: base.pts.map((p) => rotQuarter(p, cx, cy, q)), closed: base.closed };
+}
+
+/** 绕 (cx, cy) 顺时针旋转 q 个 90°（屏幕坐标，y 向下） */
+export function rotQuarter(p: Pt, cx: number, cy: number, q: number): Pt {
+  let x = p.x - cx, y = p.y - cy;
+  for (let n = 0; n < ((q % 4) + 4) % 4; n++) [x, y] = [-y, x];
+  return { x: cx + x, y: cy + y };
+}
+
+/** 把图形绕 (cx, cy) 顺时针旋转 q 个 90° */
+export function rotateVector(v: VectorShape, cx: number, cy: number, q: number): VectorShape {
+  const r = (p: Pt) => rotQuarter(p, cx, cy, q);
+  const out: VectorShape = { ...v, a: r(v.a), b: r(v.b), bend: v.bend ? r(v.bend) : null };
+  if (isClosed(v) && v.kind !== "ellipse") {
+    const rot = (((v.rot ?? 0) + q) % 4 + 4) % 4;
+    if (rot) out.rot = rot; else delete out.rot;
+  }
+  return out;
 }
 
 /** 图形的外接框（含线宽） */

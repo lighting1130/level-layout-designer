@@ -4,7 +4,7 @@ import type { CellLayer } from "./cells";
 import { CELL_SIZE, drawGrid, levelStep } from "./grid";
 import { customImageId, drawIconAt, drawIcons, type MapIcon } from "./icons";
 import { drawNotes, type Note } from "./notes";
-import { drawRefImages, type ImageStore, type RefImage } from "./refimages";
+import { drawRefImages, refImageBounds, type ImageStore, type RefImage } from "./refimages";
 import { drawVectors, vectorBounds, type VectorShape } from "./vectors";
 
 /**
@@ -61,7 +61,7 @@ export function floorBounds(f: ExportFloor, opts: ExportOptions): Box | null {
   for (const v of f.vectors) { const b = vectorBounds(v); add(b.x0, b.y0, b.x1, b.y1); }
   for (const ic of f.icons) add(ic.x - ic.size / 2, ic.y - ic.size / 2, ic.x + ic.size / 2, ic.y + ic.size / 2);
   if (opts.notes) for (const n of f.notes) add(n.x, n.y, n.x, n.y);
-  if (opts.refImages) for (const r of f.images) add(r.x, r.y, r.x + r.w, r.y + r.h);
+  if (opts.refImages) for (const r of f.images) { const b = refImageBounds(r); add(b.x0, b.y0, b.x1, b.y1); }
   return isFinite(x0) ? { x0, y0, x1, y1 } : null;
 }
 
