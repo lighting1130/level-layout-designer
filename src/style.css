@@ -61,5 +61,15 @@ button:disabled { opacity: 0.4; cursor: default; }
 .legend-actions { display: flex; gap: 6px; }
 .legend-actions button { flex: 1; height: 28px; padding: 0 6px; }
 .legend-tip { margin: 0; font-size: 12px; line-height: 1.5; opacity: 0.6; }
+.project-name {
+  width: 120px; height: 28px; padding: 0 8px; box-sizing: border-box; font: inherit; color: inherit;
+  background: #1e2127; border: 1px solid #3a3f4b; border-radius: 5px;
+}
+.project-name:focus { outline: none; border-color: #7aa2f7; }
+.toast {
+  position: fixed; left: 50%; bottom: 64px; transform: translateX(-50%); max-width: calc(100% - 32px);
+  padding: 8px 14px; border-radius: 8px; background: #2c313a; border: 1px solid #3a3f4b; box-sizing: border-box;
+}
+.toast.error { border-color: #d9455f; background: #3a2328; }
 .help { position: fixed; left: 12px; bottom: 12px; opacity: 0.6; user-select: none; pointer-events: none; }
 @media (max-width: 760px) { .help { display: none; } }

@@ -1,6 +1,7 @@
 import { Camera } from "./camera";
 import { CELL_SIZE, SUBDIVISION, brushLevel, drawBackground, drawGrid, finestLevel, levelStep } from "./grid";
 import { CellLayer, type Change } from "./cells";
+import { PROJECT_FORMAT, PROJECT_VERSION, parseProject, projectFileName, type ProjectFile } from "./project";
 
 const canvas = document.getElementById("canvas") as HTMLCanvasElement;
 const ctx = canvas.getContext("2d")!;
@@ -518,6 +519,115 @@ window.addEventListener("resize", () => {
   const c = cam.screenToWorld(width / 2, height / 2);
   resize();
   cam.centerOn(c.x, c.y, width / 2, height / 2);
+});
+
+// ---------------- 导出 / 导入工程文件 ----------------
+const NAME_KEY = "level-layout-designer.name.v1";
+const nameInput = $("project-name") as HTMLInputElement;
+try { const n = localStorage.getItem(NAME_KEY); if (n) nameInput.value = n; } catch { /* 忽略 */ }
+nameInput.addEventListener("input", () => { try { localStorage.setItem(NAME_KEY, nameInput.value); } catch { /* 忽略 */ } });
+nameInput.addEventListener("keydown", (e) => { if (e.key === "Enter" || e.key === "Escape") nameInput.blur(); });
+
+const toastEl = $("toast");
+let toastTimer = 0;
+function toast(msg: string, isError = false) {
+  toastEl.textContent = msg;
+  toastEl.classList.toggle("error", isError);
+  toastEl.hidden = false;
+  clearTimeout(toastTimer);
+  toastTimer = window.setTimeout(() => (toastEl.hidden = true), isError ? 6000 : 3000);
+}
+
+function buildProject(): ProjectFile {
+  return {
+    format: PROJECT_FORMAT,
+    version: PROJECT_VERSION,
+    name: nameInput.value.trim() || "未命名关卡",
+    exportedAt: new Date().toISOString(),
+    grid: { cellSize: CELL_SIZE, subdivision: SUBDIVISION },
+    view: { x: cam.x + width / 2 / cam.zoom, y: cam.y + height / 2 / cam.zoom, zoom: cam.zoom },
+    legend: legend.map(({ name, color }) => ({ name, color })),
+    cells: layer.toJSON(),
+  };
+}
+
+type Saver = { save(r: { filename: string; data: string }): Promise<unknown> };
+async function exportProject() {
+  const project = buildProject();
+  const filename = projectFileName(project.name);
+  const data = JSON.stringify(project, null, 2);
+  // 在 claude.ai 在线版里通过平台的下载能力保存；本地运行时用普通的浏览器下载
+  const claude = (window as unknown as { claude?: { use(n: string): Promise<unknown> } }).claude;
+  if (claude) {
+    const downloads = (await claude.use("downloads").catch(() => null)) as Saver | null;
+    if (downloads) {
+      try {
+        await downloads.save({ filename, data });
+        toast(`已导出 ${filename}（${project.cells.length} 个格子）`);
+      } catch (err) {
+        const code = (err as { code?: string })?.code;
+        if (code === "declined") return;
+        if (code === "rate_limited") toast("上一个保存窗口还没关闭，请稍后再试。", true);
+        else toast("这里无法保存文件，请在浏览器中打开本页面后再导出。", true);
+      }
+      return;
+    }
+  }
+  const url = URL.createObjectURL(new Blob([data], { type: "application/json" }));
+  const a = document.createElement("a");
+  a.href = url;
+  a.download = filename;
+  document.body.appendChild(a);
+  a.click();
+  a.remove();
+  setTimeout(() => URL.revokeObjectURL(url), 1000);
+  toast(`已导出 ${filename}（${project.cells.length} 个格子）`);
+}
+
+function loadProject(p: ProjectFile) {
+  layer.load(p.cells);
+  if (p.legend.length) {
+    legend = p.legend.map((e) => ({ ...e, id: nextId++ }));
+    saveLegend();
+    renderLegend();
+    selectEntry(legend[0].id);
+  }
+  nameInput.value = p.name || "未命名关卡";
+  try { localStorage.setItem(NAME_KEY, nameInput.value); } catch { /* 忽略 */ }
+  cam.zoom = Math.min(1e9, Math.max(1e-6, p.view.zoom));
+  cam.centerOn(p.view.x, p.view.y, width / 2, height / 2);
+  // 导入的是另一个工程，旧的撤销记录不再适用
+  undoStack.length = 0;
+  redoStack.length = 0;
+  afterEdit();
+  toast(`已导入「${nameInput.value}」（${p.cells.length} 个格子）`);
+}
+
+const fileInput = $("file-import") as HTMLInputElement;
+fileInput.addEventListener("change", async () => {
+  const file = fileInput.files?.[0];
+  fileInput.value = "";
+  if (!file) return;
+  try {
+    loadProject(parseProject(await file.text()));
+  } catch (err) {
+    toast(`导入失败：${(err as Error).message}`, true);
+  }
+});
+$("btn-export").addEventListener("click", () => void exportProject());
+$("btn-import").addEventListener("click", () => fileInput.click());
+// 也可以直接把工程文件拖进画布
+window.addEventListener("dragover", (e) => e.preventDefault());
+window.addEventListener("drop", async (e) => {
+  e.preventDefault();
+  const file = e.dataTransfer?.files?.[0];
+  if (!file) return;
+  try { loadProject(parseProject(await file.text())); } catch (err) { toast(`导入失败：${(err as Error).message}`, true); }
+});
+window.addEventListener("keydown", (e) => {
+  if (!(e.ctrlKey || e.metaKey)) return;
+  if (e.key === "s" || e.key === "S") { e.preventDefault(); void exportProject(); }
+  else if (e.key === "o" || e.key === "O") { e.preventDefault(); fileInput.click(); }
 });
 
 setTool("brush");

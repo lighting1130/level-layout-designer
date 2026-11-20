@@ -9,6 +9,13 @@
   <body>
     <canvas id="canvas"></canvas>
     <div class="toolbar" id="toolbar">
+      <div class="group">
+        <input id="project-name" class="project-name" type="text" value="未命名关卡" aria-label="工程名称" title="工程名称（也是导出的文件名）" />
+        <button id="btn-export" title="把当前关卡导出为工程文件 (Ctrl+S)">导出</button>
+        <button id="btn-import" title="打开之前导出的工程文件 (Ctrl+O)">导入</button>
+        <input id="file-import" type="file" accept=".json,application/json" hidden />
+      </div>
+      <div class="sep"></div>
       <div class="group" role="group" aria-label="工具">
         <button id="tool-brush" class="tool" data-tool="brush" title="画笔 (B)">画笔</button>
         <button id="tool-eraser" class="tool" data-tool="eraser" title="橡皮 (E)">橡皮</button>
@@ -35,6 +42,7 @@
         <p class="legend-tip">点色块改颜色，点文字改说明。改颜色时，画布上用这个颜色的格子会一起变。</p>
       </div>
     </aside>
+    <div class="toast" id="toast" role="status" aria-live="polite" hidden></div>
     <div class="hud">
       <span id="hud-brush">笔刷: 1 格</span>
       <span id="hud-cell">格子: 0, 0</span>
