@@ -53,7 +53,11 @@ export function brushLevel(zoom: number): number {
   return Math.ceil(Math.log(BRUSH_MIN_PX / (CELL_SIZE * zoom)) / Math.log(SUBDIVISION) - 1e-9);
 }
 
-export function drawGrid(ctx: CanvasRenderingContext2D, cam: Camera, width: number, height: number): void {
+/** 导出图片时可以换成深色线条（浅色背景）、不画原点坐标轴 */
+export interface GridStyle { lineRGB?: string; axes?: boolean }
+
+export function drawGrid(ctx: CanvasRenderingContext2D, cam: Camera, width: number, height: number, style: GridStyle = {}): void {
+  const lineRGB = style.lineRGB ?? LINE_RGB;
   const left = cam.x;
   const top = cam.y;
   const right = cam.x + width / cam.zoom;
@@ -69,7 +73,7 @@ export function drawGrid(ctx: CanvasRenderingContext2D, cam: Camera, width: numb
     if (alpha <= 0) continue;
     // 最粗一级画全部线；其它级跳过与更粗一级重合的线，避免叠加变亮
     const skip = k < k0 + LEVELS - 1 ? SUBDIVISION : 0;
-    ctx.strokeStyle = `rgba(${LINE_RGB},${alpha.toFixed(3)})`;
+    ctx.strokeStyle = `rgba(${lineRGB},${alpha.toFixed(3)})`;
     ctx.beginPath();
     const i0 = Math.ceil(left / step);
     const i1 = Math.floor(right / step);
@@ -92,6 +96,7 @@ export function drawGrid(ctx: CanvasRenderingContext2D, cam: Camera, width: numb
   }
 
   // 原点坐标轴
+  if (style.axes === false) return;
   const origin = cam.worldToScreen(0, 0);
   ctx.lineWidth = 1.5;
   if (origin.y >= 0 && origin.y <= height) {

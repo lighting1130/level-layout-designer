@@ -45,6 +45,7 @@
 | `legend` | 右侧“颜色说明”面板的内容，按顺序 |
 | `images` | 参考图数据（版本 4 新增）：`{ id: "data:image/webp;base64,..." }` |
 | `customIcons` | 用户导入的图标库：`[{ "id", "name" }]`，`id` 对应 `images` 里的图片 |
+| `iconLabels` | 图标说明（可选）：`{ 图标 kind: "用户写的含义" }`，没写的用图标默认名字 |
 | `currentFloor` | 导出时所在的楼层 |
 | `floors` | 各楼层的内容（版本 3 新增），按楼层号从高到低 |
 | `floors[].level` | 楼层号：1 = 第一层，2 = 第二层，-1 = 负一层……没有 0 |

@@ -71,6 +71,12 @@ export class ImageStore {
   prune(used: Set<string>) {
     for (const id of [...this.srcs.keys()]) if (!used.has(id)) { this.srcs.delete(id); this.imgs.delete(id); }
   }
+  /** 等图片解码完成（导出图片前用） */
+  async ready(id: string): Promise<void> {
+    this.get(id);
+    const img = this.imgs.get(id);
+    if (img && !(img.complete && img.naturalWidth)) await img.decode().catch(() => undefined);
+  }
   get(id: string): HTMLImageElement | null {
     let img = this.imgs.get(id);
     if (!img) {

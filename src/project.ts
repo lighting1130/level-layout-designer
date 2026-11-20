@@ -41,6 +41,16 @@ export interface ProjectFile {
   images: Record<string, string>;
   /** 用户导入的图标库 */
   customIcons: CustomIcon[];
+  /** 图标说明：图标 -> 用户写的含义（没写的用图标默认名字） */
+  iconLabels: Record<string, string>;
+}
+
+export function sanitizeIconLabels(obj: unknown): Record<string, string> {
+  const out: Record<string, string> = {};
+  if (obj && typeof obj === "object") {
+    for (const [k, v] of Object.entries(obj)) if (typeof v === "string" && v.trim() && k.length <= 80) out[k] = v.trim().slice(0, 60);
+  }
+  return out;
 }
 
 const HEX = /^#[0-9a-f]{6}$/i;
@@ -109,6 +119,7 @@ export function parseProject(text: string): ProjectFile {
     floors,
     images,
     customIcons: sanitizeCustomIcons(data.customIcons, known),
+    iconLabels: sanitizeIconLabels(data.iconLabels),
   };
 }
 

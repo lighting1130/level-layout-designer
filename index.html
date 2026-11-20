@@ -13,6 +13,7 @@
         <input id="project-name" class="project-name" type="text" value="未命名关卡" aria-label="工程名称" title="工程名称（也是导出的文件名）" />
         <button id="btn-export" title="把当前关卡导出为工程文件 (Ctrl+S)">导出</button>
         <button id="btn-import" title="打开之前导出的工程文件 (Ctrl+O)">导入</button>
+        <button id="btn-export-image" title="把楼层导出成 PNG 图片，底部带颜色和图标说明 (Ctrl+Shift+S)">导出图片</button>
         <input id="file-import" type="file" accept=".json,application/json" hidden />
       </div>
       <div class="sep"></div>
@@ -128,6 +129,11 @@
           <button id="legend-reset" title="恢复默认的颜色和说明（不影响已画的格子）">恢复默认</button>
         </div>
         <p class="legend-tip">点色块改颜色，点文字改说明。改颜色时，画布上用这个颜色的格子会一起变。</p>
+        <div id="icon-legend" class="icon-legend" hidden>
+          <strong>图标说明</strong>
+          <div id="icon-legend-list" class="icon-legend-list"></div>
+          <p class="legend-tip">这里列出关卡里用到的图标，点文字可以改成具体的意思，导出图片时会用这些说明。</p>
+        </div>
       </div>
     </aside>
     <div class="note-editor" id="note-editor" hidden role="dialog" aria-label="编辑备注">
@@ -138,6 +144,51 @@
         <button id="note-cancel">取消</button>
         <button id="note-save" class="primary">保存 (Ctrl+Enter)</button>
       </div>
+    </div>
+    <div class="modal" id="export-dialog" hidden>
+      <form class="modal-box" id="export-form" role="dialog" aria-modal="true" aria-labelledby="export-title">
+        <h2 id="export-title">导出图片</h2>
+        <label class="field"><span>楼层</span>
+          <select id="exp-floors">
+            <option value="current">只导出当前层</option>
+            <option value="each">每层单独一张（打包成 ZIP）</option>
+            <option value="stack">所有楼层拼成一张长图</option>
+          </select>
+        </label>
+        <label class="field"><span>范围</span>
+          <select id="exp-area">
+            <option value="content">自动裁剪到画了内容的区域</option>
+            <option value="view">当前屏幕看到的范围</option>
+          </select>
+        </label>
+        <label class="field"><span>清晰度</span>
+          <select id="exp-cellpx">
+            <option value="8">每格 8 像素（小图）</option>
+            <option value="16">每格 16 像素</option>
+            <option value="32">每格 32 像素（推荐）</option>
+            <option value="64">每格 64 像素（高清）</option>
+          </select>
+        </label>
+        <label class="field"><span>背景</span>
+          <select id="exp-theme">
+            <option value="light">浅色（适合打印、贴文档）</option>
+            <option value="dark">深色（和编辑器一样）</option>
+          </select>
+        </label>
+        <div class="checks">
+          <label class="check"><input id="exp-grid" type="checkbox" /> 网格线</label>
+          <label class="check"><input id="exp-notes" type="checkbox" /> 备注</label>
+          <label class="check"><input id="exp-refimages" type="checkbox" /> 参考图</label>
+          <label class="check" title="颜色说明只列出这一层实际用到的颜色"><input id="exp-usedonly" type="checkbox" /> 只列出用到的颜色</label>
+          <label class="check" title="每层用同一个范围和比例，导出的图可以叠在一起对照"><input id="exp-samearea" type="checkbox" /> 各层范围对齐</label>
+        </div>
+        <p class="modal-tip" id="export-summary"></p>
+        <div class="note-actions">
+          <span class="spacer"></span>
+          <button type="button" id="export-cancel">取消</button>
+          <button type="submit" id="export-go" class="primary">导出</button>
+        </div>
+      </form>
     </div>
     <div class="hint" id="hint" hidden></div>
     <div class="toast" id="toast" role="status" aria-live="polite" hidden></div>

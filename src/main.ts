@@ -6,7 +6,8 @@ import { drawVector, drawVectors, hitVector, isClosed, moveVector, vectorBounds,
 import { drawNotes, moveNoteLabel, moveNotePin, type Note, type NoteBox } from "./notes";
 import { DEFAULT_OPACITY, ImageStore, clampOpacity, drawRefImages, loadImageFile, refImageRect, type RefImage } from "./refimages";
 import { ICONS, customImageId, customKind, drawIconAt, drawIcons, hitIcon, isBuiltinIcon, sanitizeCustomIcons, type CustomIcon, type MapIcon } from "./icons";
-import { PROJECT_FORMAT, PROJECT_VERSION, floorName, parseProject, projectFileName, sanitizeFloors, type FloorData, type ProjectFile } from "./project";
+import { DEFAULT_EXPORT, canvasToPng, makeZip, renderExport, type ExportOptions } from "./exportimage";
+import { PROJECT_FORMAT, PROJECT_VERSION, floorName, parseProject, projectFileName, sanitizeFloors, sanitizeIconLabels, type FloorData, type ProjectFile } from "./project";
 
 const canvas = document.getElementById("canvas") as HTMLCanvasElement;
 const ctx = canvas.getContext("2d")!;
@@ -487,6 +488,7 @@ function applyEntry(e: Entry): Entry {
 }
 function afterEdit() {
   renderFloors();
+  renderIconLegend();
   btnUndo.disabled = undoStack.length === 0;
   btnRedo.disabled = redoStack.length === 0;
   save();
@@ -1299,10 +1301,71 @@ try {
   iconSize = Math.max(1, Math.min(20, Math.round(Number(localStorage.getItem(ICON_SIZE_KEY)) || 2)));
 } catch { /* 忽略 */ }
 
-const iconLabel = (kind: string) => {
+/** 图标的默认名字 */
+const iconDefaultLabel = (kind: string) => {
   if (isBuiltinIcon(kind)) return ICONS[kind].label;
   return customIcons.find((c) => customKind(c.id) === kind)?.name ?? "自定义图标";
 };
+/** 图标说明（用户可以在右侧“图标说明”里改成具体含义），没改过就用默认名字 */
+const ICON_LABELS_KEY = "level-layout-designer.iconlabels.v1";
+let iconLabels: Record<string, string> = {};
+try { iconLabels = sanitizeIconLabels(JSON.parse(localStorage.getItem(ICON_LABELS_KEY) || "{}")); } catch { /* 忽略 */ }
+const iconLabel = (kind: string) => iconLabels[kind] || iconDefaultLabel(kind);
+function setIconLabel(kind: string, text: string) {
+  const t = text.trim().slice(0, 60);
+  if (!t || t === iconDefaultLabel(kind)) delete iconLabels[kind];
+  else iconLabels[kind] = t;
+  try { localStorage.setItem(ICON_LABELS_KEY, JSON.stringify(iconLabels)); } catch { /* 忽略 */ }
+  renderIconPalette();
+}
+
+/** 右侧“图标说明”：列出所有楼层用到的图标，文字可以直接改 */
+const iconLegend = $("icon-legend");
+const iconLegendList = $("icon-legend-list");
+let iconLegendSig = "";
+function renderIconLegend(force = false) {
+  syncFloor();
+  const kinds: string[] = [];
+  for (const f of floors) for (const ic of f.icons) if (!kinds.includes(ic.kind)) kinds.push(ic.kind);
+  const sig = kinds.join("|") + "#" + kinds.map(iconLabel).join("|");
+  if (!force && sig === iconLegendSig) return;
+  // 正在输入时不要重建，免得打断
+  if (!force && iconLegendList.contains(document.activeElement)) return;
+  iconLegendSig = sig;
+  iconLegend.hidden = !kinds.length;
+  iconLegendList.replaceChildren();
+  const dpr = window.devicePixelRatio || 1;
+  for (const kind of kinds) {
+    const row = document.createElement("div");
+    row.className = "icon-legend-row";
+    let pic: HTMLElement;
+    const imgId = customImageId(kind);
+    if (imgId) {
+      const img = document.createElement("img");
+      img.src = imageStore.srcs.get(imgId) ?? "";
+      img.alt = "";
+      pic = img;
+    } else {
+      const c = document.createElement("canvas");
+      c.width = c.height = Math.round(20 * dpr);
+      const g = c.getContext("2d")!;
+      g.scale(dpr, dpr);
+      drawIconAt(g, kind, 10, 10, 20);
+      pic = c;
+    }
+    const input = document.createElement("input");
+    input.type = "text";
+    input.maxLength = 60;
+    input.value = iconLabel(kind);
+    input.placeholder = iconDefaultLabel(kind);
+    input.title = `“${iconDefaultLabel(kind)}”图标在这个关卡里代表什么`;
+    input.setAttribute("aria-label", `${iconDefaultLabel(kind)} 图标的说明`);
+    input.addEventListener("change", () => { setIconLabel(kind, input.value); input.value = iconLabel(kind); });
+    input.addEventListener("keydown", (e) => { if (e.key === "Enter" || e.key === "Escape") input.blur(); });
+    row.append(pic, input);
+    iconLegendList.appendChild(row);
+  }
+}
 
 /** 光标处要放的图标：大小按当前笔刷格子算；奇数格对齐格子中心，偶数格对齐格线交点 */
 function iconAtCursor(sx: number, sy: number): MapIcon {
@@ -1405,6 +1468,7 @@ iconRename.addEventListener("change", () => {
   customIcons = customIcons.map((c) => (c.id === id ? { ...c, name } : c));
   save();
   renderIconPalette();
+  renderIconLegend(true);
 });
 iconRename.addEventListener("keydown", (e) => { if (e.key === "Enter" || e.key === "Escape") iconRename.blur(); });
 $("icon-remove").addEventListener("click", () => {
@@ -1819,6 +1883,8 @@ function zoomCenter(factor: number) {
 }
 window.addEventListener("keydown", (e) => {
   if (e.target instanceof HTMLInputElement || e.target instanceof HTMLTextAreaElement || e.target instanceof HTMLSelectElement) return;
+  // 导出窗口开着时不触发画布快捷键
+  if (!exportDialog.hidden) return;
   // 备注编辑框开着时，按键都交给输入框，不触发工具快捷键
   if (editing) {
     if (e.key === "Escape") { e.preventDefault(); closeNoteEditor(); }
@@ -1913,34 +1979,34 @@ function buildProject(): ProjectFile {
     floors: floorData(),
     images: Object.fromEntries([...liveImageIds()].filter((id) => imageStore.has(id)).map((id) => [id, imageStore.srcs.get(id)!])),
     customIcons,
+    iconLabels,
   };
 }
 
-type Saver = { save(r: { filename: string; data: string }): Promise<unknown> };
-async function exportProject() {
-  // 备注编辑框还开着、里面有字时，先把这条备注存下来，免得导出的文件里没有它
-  if (editing && noteText.value.trim()) saveNote();
-  const project = buildProject();
-  const filename = projectFileName(project.name);
-  const data = JSON.stringify(project, null, 2);
-  // 在 claude.ai 在线版里通过平台的下载能力保存；本地运行时用普通的浏览器下载
+type Saver = { save(r: { filename: string; data: string | Blob }): Promise<unknown> };
+/**
+ * 把文件交给用户保存：在 claude.ai 在线版里通过平台的下载能力（会弹确认）；
+ * 本地运行时用普通的浏览器下载。返回是否成功。
+ */
+async function saveFile(filename: string, data: string | Blob, mime: string): Promise<boolean> {
   const claude = (window as unknown as { claude?: { use(n: string): Promise<unknown> } }).claude;
   if (claude) {
     const downloads = (await claude.use("downloads").catch(() => null)) as Saver | null;
     if (downloads) {
       try {
         await downloads.save({ filename, data });
-        toast(`已导出 ${filename}（${project.floors.length} 层）`);
+        return true;
       } catch (err) {
         const code = (err as { code?: string })?.code;
-        if (code === "declined") return;
+        if (code === "declined") return false;
         if (code === "rate_limited") toast("上一个保存窗口还没关闭，请稍后再试。", true);
+        else if (code === "too_large") toast("文件太大，请降低清晰度或缩小范围后再试。", true);
         else toast("这里无法保存文件，请在浏览器中打开本页面后再导出。", true);
+        return false;
       }
-      return;
     }
   }
-  const url = URL.createObjectURL(new Blob([data], { type: "application/json" }));
+  const url = URL.createObjectURL(typeof data === "string" ? new Blob([data], { type: mime }) : data);
   const a = document.createElement("a");
   a.href = url;
   a.download = filename;
@@ -1948,8 +2014,118 @@ async function exportProject() {
   a.click();
   a.remove();
   setTimeout(() => URL.revokeObjectURL(url), 1000);
-  toast(`已导出 ${filename}（${project.floors.length} 层）`);
+  return true;
 }
+
+async function exportProject() {
+  // 备注编辑框还开着、里面有字时，先把这条备注存下来，免得导出的文件里没有它
+  if (editing && noteText.value.trim()) saveNote();
+  const project = buildProject();
+  const filename = projectFileName(project.name);
+  const data = JSON.stringify(project, null, 2);
+  if (await saveFile(filename, data, "application/json")) toast(`已导出 ${filename}（${project.floors.length} 层）`);
+}
+
+// ---------------- 导出图片 ----------------
+const EXPORT_KEY = "level-layout-designer.exportimage.v1";
+let exportOpts: ExportOptions = { ...DEFAULT_EXPORT };
+try { exportOpts = { ...DEFAULT_EXPORT, ...JSON.parse(localStorage.getItem(EXPORT_KEY) || "{}") }; } catch { /* 忽略 */ }
+const exportDialog = $("export-dialog");
+const expSel = (id: string) => $(id) as HTMLSelectElement;
+const expChk = (id: string) => $(id) as HTMLInputElement;
+function readExportForm(): ExportOptions {
+  return {
+    floors: expSel("exp-floors").value as ExportOptions["floors"],
+    area: expSel("exp-area").value as ExportOptions["area"],
+    cellPx: Number(expSel("exp-cellpx").value) || 32,
+    theme: expSel("exp-theme").value as ExportOptions["theme"],
+    grid: expChk("exp-grid").checked,
+    notes: expChk("exp-notes").checked,
+    refImages: expChk("exp-refimages").checked,
+    usedOnly: expChk("exp-usedonly").checked,
+    sameArea: expChk("exp-samearea").checked,
+  };
+}
+function updateExportSummary() {
+  const o = readExportForm();
+  syncFloor();
+  const n = o.floors === "current" ? 1 : floors.length;
+  expChk("exp-samearea").disabled = o.floors === "current" || o.area === "view";
+  $("export-summary").textContent =
+    o.floors === "current" ? `将导出「${floorName(currentLevel)}」一张 PNG。`
+    : o.floors === "each" ? `将导出 ${n} 张 PNG（每层一张），打包成一个 ZIP。`
+    : `将把 ${n} 层从上到下拼成一张 PNG，底部是合并的颜色和图标说明。`;
+}
+function openExportDialog() {
+  if (editing) closeNoteEditor();
+  const o = exportOpts;
+  expSel("exp-floors").value = floors.length > 1 ? o.floors : "current";
+  expSel("exp-area").value = o.area;
+  expSel("exp-cellpx").value = String(o.cellPx);
+  expSel("exp-theme").value = o.theme;
+  expChk("exp-grid").checked = o.grid;
+  expChk("exp-notes").checked = o.notes;
+  expChk("exp-refimages").checked = o.refImages;
+  expChk("exp-usedonly").checked = o.usedOnly;
+  expChk("exp-samearea").checked = o.sameArea;
+  updateExportSummary();
+  exportDialog.hidden = false;
+  expSel("exp-floors").focus();
+}
+function closeExportDialog() { exportDialog.hidden = true; }
+$("export-form").addEventListener("change", updateExportSummary);
+$("export-cancel").addEventListener("click", closeExportDialog);
+exportDialog.addEventListener("pointerdown", (e) => { if (e.target === exportDialog) closeExportDialog(); });
+exportDialog.addEventListener("keydown", (e) => { if (e.key === "Escape") { e.preventDefault(); closeExportDialog(); } });
+$("btn-export-image").addEventListener("click", openExportDialog);
+$("export-form").addEventListener("submit", async (e) => {
+  e.preventDefault();
+  const opts = readExportForm();
+  exportOpts = opts;
+  try { localStorage.setItem(EXPORT_KEY, JSON.stringify(opts)); } catch { /* 忽略 */ }
+  const go = $("export-go") as HTMLButtonElement;
+  go.disabled = true;
+  go.textContent = "正在生成…";
+  try {
+    syncFloor();
+    const list = opts.floors === "current" ? floors.filter((f) => f.level === currentLevel) : floors;
+    // 导出全部楼层时跳过空楼层（全空就照常导出）
+    const nonEmpty = list.filter((f) => f.layer.size || f.vectors.length || f.notes.length || f.icons.length || (opts.refImages && f.images.length));
+    const chosen = opts.floors === "current" || !nonEmpty.length ? list : nonEmpty;
+    const v0 = cam.screenToWorld(0, 0), v1 = cam.screenToWorld(width, height);
+    const title = nameInput.value.trim() || "未命名关卡";
+    const { images: out, downscaled } = await renderExport({
+      floors: chosen.map((f) => ({ level: f.level, name: floorName(f.level), layer: f.layer, vectors: f.vectors, notes: f.notes, images: f.images, icons: f.icons })),
+      legend: legend.map(({ name, color }) => ({ name, color })),
+      iconLabel,
+      store: imageStore,
+      title,
+      view: { x0: v0.x, y0: v0.y, x1: v1.x, y1: v1.y },
+    }, opts);
+    const base = projectFileName(title).replace(/\.json$/, "");
+    let ok: boolean;
+    if (out.length === 1) {
+      const name = opts.floors === "stack" ? `${base}-全部楼层.png` : `${base}-${out[0].name}.png`;
+      ok = await saveFile(name, await canvasToPng(out[0].canvas), "image/png");
+    } else {
+      const files = await Promise.all(out.map(async (img, n) => ({
+        name: `${String(n + 1).padStart(2, "0")}-${base}-${img.name}.png`,
+        data: new Uint8Array(await (await canvasToPng(img.canvas)).arrayBuffer()),
+      })));
+      ok = await saveFile(`${base}-楼层图片.zip`, makeZip(files), "application/zip");
+    }
+    if (ok) {
+      closeExportDialog();
+      const skipped = list.length - chosen.length;
+      toast(`已导出${out.length > 1 ? ` ${out.length} 张图片` : "图片"}${skipped > 0 ? `（跳过 ${skipped} 个空楼层）` : ""}${downscaled ? "。内容太大，已自动降低清晰度" : ""}`);
+    }
+  } catch (err) {
+    toast(`导出图片失败：${(err as Error).message}`, true);
+  } finally {
+    go.disabled = false;
+    go.textContent = "导出";
+  }
+});
 
 function loadProject(p: ProjectFile) {
   endStroke();
@@ -1958,6 +2134,8 @@ function loadProject(p: ProjectFile) {
   for (const [id, src] of Object.entries(p.images)) imageStore.set(id, src);
   // 导入的自定义图标合并进图标库
   for (const ci of p.customIcons) if (!customIcons.some((c) => c.id === ci.id)) customIcons = [...customIcons, ci];
+  iconLabels = { ...iconLabels, ...p.iconLabels };
+  try { localStorage.setItem(ICON_LABELS_KEY, JSON.stringify(iconLabels)); } catch { /* 忽略 */ }
   renderIconPalette();
   loadFloors(p.floors, p.currentFloor);
   renderFloors();
@@ -2005,7 +2183,8 @@ window.addEventListener("keydown", (e) => {
   if (!(e.ctrlKey || e.metaKey)) return;
   if (e.key === "s" || e.key === "S") {
     e.preventDefault();
-    void exportProject();
+    if (e.shiftKey) openExportDialog();
+    else void exportProject();
   }
   else if (e.key === "o" || e.key === "O") { e.preventDefault(); fileInput.click(); }
 });

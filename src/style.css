@@ -171,3 +171,21 @@ select {
   .floors { bottom: auto; top: 420px; max-height: calc(100% - 500px); width: 140px; }
   .hint { top: auto; bottom: 112px; white-space: normal; max-width: calc(100% - 100px); }
 }
+.icon-legend { display: flex; flex-direction: column; gap: 4px; border-top: 1px solid #3a3f4b; padding-top: 8px; }
+.icon-legend-list { display: flex; flex-direction: column; gap: 2px; max-height: 220px; overflow-y: auto; }
+.icon-legend-row { display: grid; grid-template-columns: 22px 1fr; align-items: center; gap: 8px; padding: 2px 4px 2px 6px; }
+.icon-legend-row canvas, .icon-legend-row img { width: 20px; height: 20px; object-fit: contain; }
+.icon-legend-row input { min-width: 0; background: transparent; border: 1px solid transparent; color: inherit; font: inherit; padding: 3px 4px; border-radius: 4px; }
+.icon-legend-row input:hover, .icon-legend-row input:focus { border-color: #4a5060; background: #1e2127; outline: none; }
+.modal { position: fixed; inset: 0; background: rgba(0, 0, 0, 0.5); display: grid; place-items: center; z-index: 20; padding: 16px; }
+.modal-box {
+  width: min(420px, 100%); box-sizing: border-box; display: flex; flex-direction: column; gap: 10px; padding: 16px;
+  background: #23272e; border: 1px solid #3a3f4b; border-radius: 10px; box-shadow: 0 12px 40px rgba(0, 0, 0, 0.5);
+  max-height: 100%; overflow-y: auto;
+}
+.modal-box h2 { margin: 0 0 4px; font-size: 16px; }
+.modal-box .field { display: grid; grid-template-columns: 56px 1fr; align-items: center; gap: 8px; }
+.modal-box .field span { opacity: 0.75; }
+.modal-box select { width: 100%; min-width: 0; }
+.modal-box .checks { display: flex; flex-wrap: wrap; gap: 6px 10px; }
+.modal-tip { margin: 0; font-size: 12px; opacity: 0.7; min-height: 1em; }
