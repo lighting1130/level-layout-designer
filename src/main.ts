@@ -5,6 +5,7 @@ import { ARROW_LABELS, arrowHeads, isArrowMode, type ArrowMode, MAX_SHAPE_CELLS,
 import { drawVector, drawVectors, hitVector, isClosed, moveVector, vectorBounds, sanitizeVectors, type VectorShape } from "./vectors";
 import { drawNotes, moveNoteLabel, moveNotePin, type Note, type NoteBox } from "./notes";
 import { DEFAULT_OPACITY, ImageStore, clampOpacity, drawRefImages, loadImageFile, refImageRect, type RefImage } from "./refimages";
+import { ICONS, customImageId, customKind, drawIconAt, drawIcons, hitIcon, isBuiltinIcon, sanitizeCustomIcons, type CustomIcon, type MapIcon } from "./icons";
 import { PROJECT_FORMAT, PROJECT_VERSION, floorName, parseProject, projectFileName, sanitizeFloors, type FloorData, type ProjectFile } from "./project";
 
 const canvas = document.getElementById("canvas") as HTMLCanvasElement;
@@ -188,7 +189,7 @@ function hslToHex(h: number, s: number, l: number): string {
 }
 
 // ---------------- 工具 ----------------
-type Tool = "select" | "brush" | "eraser" | "arc" | "shape" | "note" | "hand";
+type Tool = "select" | "brush" | "eraser" | "arc" | "shape" | "note" | "icon" | "hand";
 let tool: Tool = "brush";
 let spaceDown = false;
 
@@ -196,7 +197,8 @@ function setTool(t: Tool) {
   if (t !== tool) { cancelDraft(); if (t !== "select") clearSelection(); }
   tool = t;
   shapeOptions.hidden = t !== "shape";
-  $("tool-options").hidden = t !== "shape" && t !== "arc";
+  $("tool-options").hidden = t !== "shape" && t !== "arc" && t !== "icon";
+  $("icon-options").hidden = t !== "icon";
   $("sides-row").hidden = t !== "shape" || shapeKindSel.value !== "polygon";
   strokeOptions.hidden = t !== "shape" && t !== "arc";
   updateSidesRow();
@@ -314,7 +316,7 @@ $("stroke-inc").addEventListener("click", () => strokeStep(1));
 
 // ---------------- 撤销 / 重做 ----------------
 /** 一步撤销：格子的修改记录 + （若有改动）修改前的平滑图形列表 */
-interface Entry { floor: number; cells: Change; vectors?: VectorShape[]; notes?: Note[]; images?: RefImage[] }
+interface Entry { floor: number; cells: Change; vectors?: VectorShape[]; notes?: Note[]; images?: RefImage[]; icons?: MapIcon[] }
 const undoStack: Entry[] = [];
 const redoStack: Entry[] = [];
 /** 当前楼层的平滑图形（画在格子和网格之上）；切换楼层时与 floors 同步 */
@@ -330,13 +332,17 @@ const imageStore = new ImageStore(requestRender);
 /** 框选工具下选中的参考图，以及正在拖动/缩放的参考图（放在这里声明，启动时加载楼层就会用到） */
 let imgSel: RefImage | null = null;
 let imgDrag: { img: RefImage; kind: "move" | "resize"; start: Pt; startScreen: Pt; dx: number; dy: number; moved: boolean } | null = null;
-interface Floor { level: number; layer: CellLayer; vectors: VectorShape[]; notes: Note[]; images: RefImage[] }
+/** 当前楼层的关卡图标 */
+let icons: MapIcon[] = [];
+/** 用户导入的图标库（所有楼层共用） */
+let customIcons: CustomIcon[] = [];
+interface Floor { level: number; layer: CellLayer; vectors: VectorShape[]; notes: Note[]; images: RefImage[]; icons: MapIcon[] }
 /** 按楼层号从高到低排列 */
-let floors: Floor[] = [{ level: 1, layer, vectors, notes, images }];
+let floors: Floor[] = [{ level: 1, layer, vectors, notes, images, icons }];
 let currentLevel = 1;
 const currentFloor = () => floors.find((f) => f.level === currentLevel)!;
 /** 把当前楼层的 vectors 写回楼层对象 */
-function syncFloor() { const f = currentFloor(); f.vectors = vectors; f.notes = notes; f.images = images; }
+function syncFloor() { const f = currentFloor(); f.vectors = vectors; f.notes = notes; f.images = images; f.icons = icons; }
 
 function switchFloor(level: number) {
   if (!floors.some((f) => f.level === level)) return;
@@ -351,6 +357,7 @@ function switchFloor(level: number) {
   vectors = currentFloor().vectors;
   notes = currentFloor().notes;
   images = currentFloor().images;
+  icons = currentFloor().icons;
   imgSel = null;
   renderFloors();
   save();
@@ -362,7 +369,7 @@ function addFloor(dir: 1 | -1) {
   const levels = floors.map((f) => f.level);
   let level = dir > 0 ? Math.max(...levels) + 1 : Math.min(...levels) - 1;
   if (level === 0) level = dir;
-  floors.push({ level, layer: new CellLayer(), vectors: [], notes: [], images: [] });
+  floors.push({ level, layer: new CellLayer(), vectors: [], notes: [], images: [], icons: [] });
   floors.sort((a, b) => b.level - a.level);
   switchFloor(level);
   renderFloors();
@@ -394,6 +401,7 @@ function deleteCurrentFloor(btn: HTMLButtonElement) {
   vectors = next.vectors;
   notes = next.notes;
   images = next.images;
+  icons = next.icons;
   imgSel = null;
   renderFloors();
   afterEdit();
@@ -416,7 +424,7 @@ function renderFloors() {
     const b = document.createElement("button");
     b.className = "floor-row";
     b.setAttribute("aria-pressed", String(f.level === currentLevel));
-    const count = f.layer.size + (f.level === currentLevel ? vectors.length + notes.length + images.length : f.vectors.length + f.notes.length + f.images.length);
+    const count = f.layer.size + (f.level === currentLevel ? vectors.length + notes.length + images.length + icons.length : f.vectors.length + f.notes.length + f.images.length + f.icons.length);
     const name = document.createElement("span");
     name.textContent = floorName(f.level);
     const meta = document.createElement("span");
@@ -427,6 +435,8 @@ function renderFloors() {
     b.addEventListener("click", () => switchFloor(f.level));
     floorList.appendChild(b);
   }
+  // 楼层多时列表会滚动，保证当前层看得见
+  floorList.querySelector<HTMLElement>('[aria-pressed="true"]')?.scrollIntoView({ block: "nearest" });
   const del = $("floor-del") as HTMLButtonElement;
   del.disabled = floors.length <= 1;
   if (!deleteArmed) { del.textContent = "删除当前层"; del.classList.remove("danger"); }
@@ -444,9 +454,9 @@ function stepFloor(dir: 1 | -1) {
 const btnUndo = $("btn-undo") as HTMLButtonElement;
 const btnRedo = $("btn-redo") as HTMLButtonElement;
 
-function commit(change: Change, vectorsBefore?: VectorShape[], notesBefore?: Note[], imagesBefore?: RefImage[]) {
-  if (change.size === 0 && !vectorsBefore && !notesBefore && !imagesBefore) return;
-  undoStack.push({ floor: currentLevel, cells: change, vectors: vectorsBefore, notes: notesBefore, images: imagesBefore });
+function commit(change: Change, vectorsBefore?: VectorShape[], notesBefore?: Note[], imagesBefore?: RefImage[], iconsBefore?: MapIcon[]) {
+  if (change.size === 0 && !vectorsBefore && !notesBefore && !imagesBefore && !iconsBefore) return;
+  undoStack.push({ floor: currentLevel, cells: change, vectors: vectorsBefore, notes: notesBefore, images: imagesBefore, icons: iconsBefore });
   if (undoStack.length > 200) undoStack.shift();
   redoStack.length = 0;
   afterEdit();
@@ -472,6 +482,7 @@ function applyEntry(e: Entry): Entry {
   if (e.vectors) { inv.vectors = vectors; vectors = e.vectors; }
   if (e.notes) { inv.notes = notes; notes = e.notes; }
   if (e.images) { inv.images = images; images = e.images; imgSel = null; }
+  if (e.icons) { inv.icons = icons; icons = e.icons; }
   return inv;
 }
 function afterEdit() {
@@ -489,11 +500,13 @@ $("btn-clear").addEventListener("click", () => {
   const before = vectors.length ? vectors : undefined;
   const notesBefore = notes.length ? notes : undefined;
   const imagesBefore = images.length ? images : undefined;
+  const iconsBefore = icons.length ? icons : undefined;
   vectors = [];
   notes = [];
   images = [];
+  icons = [];
   imgSel = null;
-  commit(ch, before, notesBefore, imagesBefore);
+  commit(ch, before, notesBefore, imagesBefore, iconsBefore);
 });
 
 // ---------------- 本地保存（刷新页面不丢） ----------------
@@ -502,13 +515,13 @@ const VECTOR_KEY = "level-layout-designer.vectors.v1";
 const FLOORS_KEY = "level-layout-designer.floors.v1";
 function floorData(): FloorData[] {
   syncFloor();
-  return floors.map((f) => ({ level: f.level, cells: f.layer.toJSON(), vectors: f.vectors, notes: f.notes, images: f.images }));
+  return floors.map((f) => ({ level: f.level, cells: f.layer.toJSON(), vectors: f.vectors, notes: f.notes, images: f.images, icons: f.icons }));
 }
 function loadFloors(data: FloorData[], current: number) {
   floors = sanitizeFloors(data, (id) => imageStore.has(id)).map((f) => {
     const l = new CellLayer();
     l.load(f.cells);
-    return { level: f.level, layer: l, vectors: f.vectors, notes: f.notes, images: f.images };
+    return { level: f.level, layer: l, vectors: f.vectors, notes: f.notes, images: f.images, icons: f.icons };
   });
   const cur = floors.find((f) => f.level === current) ?? floors.find((f) => f.level === 1) ?? floors[0];
   currentLevel = cur.level;
@@ -516,9 +529,11 @@ function loadFloors(data: FloorData[], current: number) {
   vectors = cur.vectors;
   notes = cur.notes;
   images = cur.images;
+  icons = cur.icons;
   imgSel = null;
 }
 const IMAGES_KEY = "level-layout-designer.images.v1";
+const CUSTOM_ICONS_KEY = "level-layout-designer.customicons.v1";
 let saveTimer = 0;
 /** 上次写入本地的图片 id 列表；图片数据很大，只在增删图片时才重写 */
 let savedImageIds = "";
@@ -526,10 +541,24 @@ let imageSaveWarned = false;
 /** 所有楼层和撤销记录里还在用的图片 id */
 function usedImageIds(): Set<string> {
   const used = new Set<string>();
-  for (const f of floors) for (const r of f.images) used.add(r.id);
+  for (const id of liveImageIds()) used.add(id);
   for (const r of images) used.add(r.id);
-  for (const stack of [undoStack, redoStack]) for (const e of stack) e.images?.forEach((r) => used.add(r.id));
+  for (const stack of [undoStack, redoStack]) for (const e of stack) {
+    e.images?.forEach((r) => used.add(r.id));
+    e.icons?.forEach((ic) => { const id = customImageId(ic.kind); if (id) used.add(id); });
+  }
   return used;
+}
+/** 当前各楼层和图标库实际在用的图片（参考图 + 自定义图标） */
+function liveImageIds(): Set<string> {
+  syncFloor();
+  const live = new Set<string>();
+  for (const f of floors) {
+    for (const r of f.images) live.add(r.id);
+    for (const ic of f.icons) { const id = customImageId(ic.kind); if (id) live.add(id); }
+  }
+  for (const c of customIcons) live.add(c.id);
+  return live;
 }
 function flushSave() {
   clearTimeout(saveTimer);
@@ -537,9 +566,9 @@ function flushSave() {
   try {
     localStorage.setItem(FLOORS_KEY, JSON.stringify({ current: currentLevel, floors: floorData() }));
   } catch { /* 存储不可用时忽略 */ }
-  // 本地只存当前各楼层用到的图片（撤销记录里的不存）
-  const live = new Set<string>();
-  for (const f of floors) for (const r of f.images) live.add(r.id);
+  try { localStorage.setItem(CUSTOM_ICONS_KEY, JSON.stringify(customIcons)); } catch { /* 忽略 */ }
+  // 本地只存当前各楼层和图标库用到的图片（撤销记录里的不存）
+  const live = liveImageIds();
   const ids = [...live].sort().join(",");
   if (ids === savedImageIds) return;
   try {
@@ -565,6 +594,7 @@ try {
   const obj = rawI ? JSON.parse(rawI) : null;
   if (obj && typeof obj === "object") for (const [id, src] of Object.entries(obj)) if (typeof src === "string" && src.startsWith("data:image/")) imageStore.set(id, src);
   savedImageIds = Object.keys(obj ?? {}).sort().join(",");
+  customIcons = sanitizeCustomIcons(JSON.parse(localStorage.getItem(CUSTOM_ICONS_KEY) || "[]"), (id) => imageStore.has(id));
 } catch { /* 忽略 */ }
 try {
   const rawF = localStorage.getItem(FLOORS_KEY);
@@ -575,7 +605,7 @@ try {
     // 旧版本只有一层：迁移为第一层
     const raw = localStorage.getItem(STORAGE_KEY);
     const rawV = localStorage.getItem(VECTOR_KEY);
-    loadFloors([{ level: 1, cells: raw ? JSON.parse(raw) : [], vectors: rawV ? sanitizeVectors(JSON.parse(rawV)) : [], notes: [], images: [] }], 1);
+    loadFloors([{ level: 1, cells: raw ? JSON.parse(raw) : [], vectors: rawV ? sanitizeVectors(JSON.parse(rawV)) : [], notes: [], images: [], icons: [] }], 1);
   }
 } catch { /* 忽略损坏或不可用的存储 */ }
 
@@ -605,6 +635,17 @@ function cellAt(sx: number, sy: number, k: number) {
 }
 
 function drawHover() {
+  if (tool === "icon") {
+    canvas.style.cursor = "copy";
+    if (hover && mode !== "pan" && !spaceDown) {
+      const ic = iconAtCursor(hover.x, hover.y);
+      const q = cam.worldToScreen(ic.x, ic.y);
+      ctx.globalAlpha = 0.55;
+      drawIconAt(ctx, ic.kind, q.x, q.y, ic.size * cam.zoom, false, (id) => imageStore.get(id));
+      ctx.globalAlpha = 1;
+    }
+    return;
+  }
   if (hover && !draft && smooth && (tool === "arc" || tool === "shape") && mode !== "pan" && !spaceDown) {
     // 平滑模式：显示吸附到的网格交点
     const p = snapPoint(hover.x, hover.y, activeLevel());
@@ -671,6 +712,10 @@ function frame() {
     for (const f of others) drawVectors(ctx, cam, f.vectors, floorAlpha(f.level));
     drawVectors(ctx, cam, hiddenVec ? vectors.filter((v) => !hiddenVec.has(v)) : vectors);
     drawDraft();
+    const getImg = (id: string) => imageStore.get(id);
+    for (const f of others) drawIcons(ctx, cam, f.icons, getImg, floorAlpha(f.level));
+    const hiddenIcons = moveDrag && selection ? new Set(selection.icons) : undefined;
+    drawIcons(ctx, cam, hiddenIcons ? icons.filter((ic) => !hiddenIcons.has(ic)) : icons, getImg, 1, selection ? new Set(selection.icons) : undefined);
     for (const f of others) drawNotes(ctx, cam, f.notes, floorAlpha(f.level));
     const hiddenNotes = moveDrag && selection ? new Set(selection.notes) : undefined;
     let shown = hiddenNotes ? notes.filter((n) => !hiddenNotes.has(n)) : notes;
@@ -731,7 +776,7 @@ type Mode = "none" | "paint" | "draw" | "pan" | "pinch" | "marquee" | "move" | "
 let mode: Mode = "none";
 const pointers = new Map<number, { x: number; y: number }>();
 let pinchDist = 0;
-let stroke: { change: Change; k: number; last: { x: number; y: number }; vectorsBefore?: VectorShape[] } | null = null;
+let stroke: { change: Change; k: number; last: { x: number; y: number }; vectorsBefore?: VectorShape[]; iconsBefore?: MapIcon[] } | null = null;
 
 /** 一笔之内锁定格子层级，避免中途缩放导致粗细混杂 */
 function activeLevel() {
@@ -757,6 +802,13 @@ function applyBrushAt(sx: number, sy: number) {
       vectors = kept;
       changed = true;
     }
+    // 碰到的图标也删掉
+    const keptIcons = icons.filter((ic) => !hitIcon(ic, w.x, w.y, tol / 2));
+    if (keptIcons.length !== icons.length) {
+      if (!stroke.iconsBefore) stroke.iconsBefore = icons;
+      icons = keptIcons;
+      changed = true;
+    }
     return changed;
   }
   return layer.paint(c.k, c.i, c.j, currentColor, stroke.change);
@@ -778,7 +830,7 @@ function paintSegment(a: { x: number; y: number }, b: { x: number; y: number }) 
 
 function endStroke() {
   if (stroke) {
-    commit(stroke.change, stroke.vectorsBefore);
+    commit(stroke.change, stroke.vectorsBefore, undefined, undefined, stroke.iconsBefore);
     stroke = null;
   }
 }
@@ -1042,6 +1094,7 @@ interface Selection {
   cells: Cell[];
   vectors: VectorShape[];
   notes: Note[];
+  icons: MapIcon[];
   box: { x0: number; y0: number; x1: number; y1: number };
   /** 移动的最小步长（世界坐标） */
   step: number;
@@ -1235,6 +1288,137 @@ imageInput.addEventListener("change", () => {
   imageInput.value = "";
   if (file) void importImageFile(file);
 });
+// ---------------- 关卡图标 ----------------
+const ICON_KIND_KEY = "level-layout-designer.iconkind.v1";
+const ICON_SIZE_KEY = "level-layout-designer.iconsize.v1";
+let iconKind = "stairs-up";
+let iconSize = 2;
+try {
+  const k = localStorage.getItem(ICON_KIND_KEY);
+  if (k && (isBuiltinIcon(k) || customIcons.some((c) => customKind(c.id) === k))) iconKind = k;
+  iconSize = Math.max(1, Math.min(20, Math.round(Number(localStorage.getItem(ICON_SIZE_KEY)) || 2)));
+} catch { /* 忽略 */ }
+
+const iconLabel = (kind: string) => {
+  if (isBuiltinIcon(kind)) return ICONS[kind].label;
+  return customIcons.find((c) => customKind(c.id) === kind)?.name ?? "自定义图标";
+};
+
+/** 光标处要放的图标：大小按当前笔刷格子算；奇数格对齐格子中心，偶数格对齐格线交点 */
+function iconAtCursor(sx: number, sy: number): MapIcon {
+  const s = levelStep(brushLevel(cam.zoom));
+  const w = cam.screenToWorld(sx, sy);
+  const off = iconSize % 2 ? s / 2 : 0;
+  const snap = (v: number) => Math.round((v - off) / s) * s + off;
+  return { kind: iconKind, x: snap(w.x), y: snap(w.y), size: iconSize * s };
+}
+
+function placeIcon(sx: number, sy: number) {
+  const ic = iconAtCursor(sx, sy);
+  // 同一位置已有同样的图标就不重复放
+  if (icons.some((o) => o.kind === ic.kind && o.x === ic.x && o.y === ic.y && o.size === ic.size)) return;
+  const before = icons;
+  icons = [...icons, ic];
+  commit(new Map(), undefined, undefined, undefined, before);
+}
+
+const iconGrid = $("icon-grid");
+const iconSizeInput = $("icon-size") as HTMLInputElement;
+const iconRename = $("icon-rename") as HTMLInputElement;
+function setIconKind(kind: string) {
+  iconKind = kind;
+  try { localStorage.setItem(ICON_KIND_KEY, kind); } catch { /* 忽略 */ }
+  renderIconPalette();
+  setTool("icon");
+}
+function setIconSize(n: number) {
+  iconSize = Math.max(1, Math.min(20, Math.round(n) || 1));
+  iconSizeInput.value = String(iconSize);
+  try { localStorage.setItem(ICON_SIZE_KEY, String(iconSize)); } catch { /* 忽略 */ }
+  requestRender();
+}
+function renderIconPalette() {
+  iconGrid.replaceChildren();
+  const dpr = window.devicePixelRatio || 1;
+  const add = (kind: string, label: string, content: HTMLElement) => {
+    const b = document.createElement("button");
+    b.title = label;
+    b.setAttribute("aria-label", label);
+    b.setAttribute("aria-pressed", String(kind === iconKind));
+    b.append(content);
+    b.addEventListener("click", () => { setIconKind(kind); b.blur(); });
+    iconGrid.appendChild(b);
+  };
+  for (const [kind, def] of Object.entries(ICONS)) {
+    const c = document.createElement("canvas");
+    c.width = c.height = Math.round(24 * dpr);
+    const g = c.getContext("2d")!;
+    g.scale(dpr, dpr);
+    drawIconAt(g, kind, 12, 12, 24);
+    add(kind, def.label, c);
+  }
+  for (const ci of customIcons) {
+    const img = document.createElement("img");
+    img.src = imageStore.srcs.get(ci.id) ?? "";
+    img.alt = "";
+    add(customKind(ci.id), ci.name, img);
+  }
+  $("icon-name").textContent = iconLabel(iconKind);
+  const custom = customIcons.find((c) => customKind(c.id) === iconKind);
+  $("icon-custom-row").hidden = !custom;
+  if (custom && document.activeElement !== iconRename) iconRename.value = custom.name;
+}
+iconSizeInput.value = String(iconSize);
+iconSizeInput.addEventListener("change", () => { setIconSize(Number(iconSizeInput.value)); iconSizeInput.blur(); });
+iconSizeInput.addEventListener("keydown", (e) => { if (e.key === "Enter" || e.key === "Escape") iconSizeInput.blur(); });
+$("icon-dec").addEventListener("click", () => setIconSize(iconSize - 1));
+$("icon-inc").addEventListener("click", () => setIconSize(iconSize + 1));
+
+// 自定义图标：导入、改名、移除
+const iconFileInput = $("file-icon") as HTMLInputElement;
+$("icon-import").addEventListener("click", () => iconFileInput.click());
+iconFileInput.addEventListener("change", async () => {
+  const files = [...(iconFileInput.files ?? [])];
+  iconFileInput.value = "";
+  let added = 0, last = "";
+  for (const file of files) {
+    try {
+      const { src } = await loadImageFile(file, 256);
+      const id = imageStore.add(src);
+      if (!customIcons.some((c) => c.id === id)) {
+        const name = (file.name || "自定义图标").replace(/\.[^.]+$/, "").slice(0, 40) || "自定义图标";
+        customIcons = [...customIcons, { id, name }];
+      }
+      last = customKind(id);
+      added++;
+    } catch { /* 跳过读不了的文件 */ }
+  }
+  if (!added) { toast("无法读取这些图片，请换 PNG / SVG / JPG / WebP 格式试试。", true); return; }
+  save();
+  setIconKind(last);
+  toast(`已导入 ${added} 个图标，点击画布放置；可以在下面改名字`);
+});
+iconRename.addEventListener("change", () => {
+  const id = customImageId(iconKind);
+  const name = iconRename.value.trim().slice(0, 40);
+  if (!id || !name) return;
+  customIcons = customIcons.map((c) => (c.id === id ? { ...c, name } : c));
+  save();
+  renderIconPalette();
+});
+iconRename.addEventListener("keydown", (e) => { if (e.key === "Enter" || e.key === "Escape") iconRename.blur(); });
+$("icon-remove").addEventListener("click", () => {
+  const id = customImageId(iconKind);
+  if (!id) return;
+  const removed = customIcons.find((c) => c.id === id);
+  customIcons = customIcons.filter((c) => c.id !== id);
+  iconKind = "stairs-up";
+  save();
+  renderIconPalette();
+  if (removed) toast(`已从图标库移除「${removed.name}」（画布上已放的保留）`);
+});
+renderIconPalette();
+
 // 直接粘贴截图（Ctrl+V）
 window.addEventListener("paste", (e) => {
   if (e.target instanceof HTMLInputElement || e.target instanceof HTMLTextAreaElement) return;
@@ -1245,8 +1429,8 @@ window.addEventListener("paste", (e) => {
   void importImageFile(file);
 });
 
-function makeSelection(cells: Cell[], vecs: VectorShape[], ns: Note[] = []): Selection | null {
-  if (!cells.length && !vecs.length && !ns.length) return null;
+function makeSelection(cells: Cell[], vecs: VectorShape[], ns: Note[] = [], ics: MapIcon[] = []): Selection | null {
+  if (!cells.length && !vecs.length && !ns.length && !ics.length) return null;
   let x0 = Infinity, y0 = Infinity, x1 = -Infinity, y1 = -Infinity;
   let step = levelStep(brushLevel(cam.zoom));
   for (const c of cells) {
@@ -1262,7 +1446,11 @@ function makeSelection(cells: Cell[], vecs: VectorShape[], ns: Note[] = []): Sel
   for (const n of ns) {
     x0 = Math.min(x0, n.x); y0 = Math.min(y0, n.y); x1 = Math.max(x1, n.x); y1 = Math.max(y1, n.y);
   }
-  return { cells, vectors: vecs, notes: ns, box: { x0, y0, x1, y1 }, step };
+  for (const ic of ics) {
+    const h = ic.size / 2;
+    x0 = Math.min(x0, ic.x - h); y0 = Math.min(y0, ic.y - h); x1 = Math.max(x1, ic.x + h); y1 = Math.max(y1, ic.y + h);
+  }
+  return { cells, vectors: vecs, notes: ns, icons: ics, box: { x0, y0, x1, y1 }, step };
 }
 
 function selectInRect(a: Pt, b: Pt) {
@@ -1270,12 +1458,13 @@ function selectInRect(a: Pt, b: Pt) {
   const cells = layer.cellsInRect(x0, y0, x1, y1);
   const vecs = vectors.filter((v) => { const r = vectorBounds(v); return r.x0 >= x0 && r.y0 >= y0 && r.x1 <= x1 && r.y1 <= y1; });
   const ns = notes.filter((n) => n.x >= x0 && n.x <= x1 && n.y >= y0 && n.y <= y1);
-  selection = makeSelection(cells, vecs, ns);
+  const ics = icons.filter((ic) => ic.x >= x0 && ic.x <= x1 && ic.y >= y0 && ic.y <= y1);
+  selection = makeSelection(cells, vecs, ns, ics);
 }
 
 function selectAll() {
   setTool("select");
-  selection = makeSelection(layer.cellsInRect(-Infinity, -Infinity, Infinity, Infinity), [...vectors], [...notes]);
+  selection = makeSelection(layer.cellsInRect(-Infinity, -Infinity, Infinity, Infinity), [...vectors], [...notes], [...icons]);
   requestRender();
 }
 
@@ -1307,8 +1496,16 @@ function moveSelection(dx: number, dy: number) {
     movedNotes = selection.notes.map((n) => ({ ...n, x: n.x + dx, y: n.y + dy }));
     notes = notes.filter((n) => !set.has(n)).concat(movedNotes);
   }
-  commit(change, before, notesBefore);
-  selection = makeSelection(moved, movedVecs, movedNotes);
+  let iconsBefore: MapIcon[] | undefined;
+  let movedIcons = selection.icons;
+  if (selection.icons.length) {
+    iconsBefore = icons;
+    const set = new Set(selection.icons);
+    movedIcons = selection.icons.map((ic) => ({ ...ic, x: ic.x + dx, y: ic.y + dy }));
+    icons = icons.filter((ic) => !set.has(ic)).concat(movedIcons);
+  }
+  commit(change, before, notesBefore, undefined, iconsBefore);
+  selection = makeSelection(moved, movedVecs, movedNotes, movedIcons);
   if (selection) selection.step = Math.max(selection.step, levelStep(brushLevel(cam.zoom)));
   requestRender();
 }
@@ -1332,7 +1529,7 @@ function recolorSelection(color: string, name: string) {
   if (!change.size && !before) return;
   const step = selection.step;
   commit(change, before);
-  selection = makeSelection(cells, vecs, selection.notes);
+  selection = makeSelection(cells, vecs, selection.notes, selection.icons);
   if (selection) selection.step = step;
   toast(`已把选中的 ${cells.length + vecs.length} 项改成「${name}」`);
 }
@@ -1353,8 +1550,14 @@ function deleteSelection() {
     const set = new Set(selection.notes);
     notes = notes.filter((n) => !set.has(n));
   }
-  commit(change, before, notesBefore);
-  const n = selection.cells.length + selection.vectors.length + selection.notes.length;
+  let iconsBefore: MapIcon[] | undefined;
+  if (selection.icons.length) {
+    iconsBefore = icons;
+    const set = new Set(selection.icons);
+    icons = icons.filter((ic) => !set.has(ic));
+  }
+  commit(change, before, notesBefore, undefined, iconsBefore);
+  const n = selection.cells.length + selection.vectors.length + selection.notes.length + selection.icons.length;
   selection = null;
   toast(`已删除 ${n} 项`);
 }
@@ -1391,6 +1594,7 @@ function drawSelection() {
       ctx.fillRect(x - 0.5, y - 0.5, Math.max(1, w), Math.max(1, h));
     }
     for (const v of selection.vectors) drawVector(ctx, cam, moveVector(v, dx, dy));
+    drawIcons(ctx, cam, selection.icons.map((ic) => ({ ...ic, x: ic.x + dx, y: ic.y + dy })), (id) => imageStore.get(id));
     drawNotes(ctx, cam, selection.notes.map((n) => ({ ...n, x: n.x + dx, y: n.y + dy })));
   }
   const b = selection.box;
@@ -1429,6 +1633,8 @@ canvas.addEventListener("pointerdown", (e) => {
   if (wantsPan) {
     mode = "pan";
     canvas.classList.add("panning");
+  } else if (e.button === 0 && tool === "icon") {
+    placeIcon(p.x, p.y);
   } else if (e.button === 0 && tool === "note") {
     e.preventDefault();
     if (editing) closeNoteEditor();
@@ -1537,7 +1743,7 @@ function endPointer(e: PointerEvent) {
   if (pointers.size === 0 && mode === "marquee" && marquee) {
     selectInRect(marquee.a, marquee.b);
     marquee = null;
-    if (selection) toast(`已选中 ${selection.cells.length + selection.vectors.length + selection.notes.length} 项：拖动移动，点右侧颜色换色，Delete 删除`);
+    if (selection) toast(`已选中 ${selection.cells.length + selection.vectors.length + selection.notes.length + selection.icons.length} 项：拖动移动，点右侧颜色换色，Delete 删除`);
   } else if (pointers.size === 0 && mode === "imgDrag") {
     endImageDrag();
   } else if (pointers.size === 0 && mode === "noteDrag") {
@@ -1641,6 +1847,7 @@ window.addEventListener("keydown", (e) => {
   }
   if (e.key === "v" || e.key === "V") { setTool("select"); return; }
   if (e.key === "n" || e.key === "N") { setTool("note"); return; }
+  if (e.key === "i" || e.key === "I") { setTool("icon"); return; }
   if (e.key === "Enter" && draft && draft.phase === "bend") { commitDraft(); return; }
   if (e.key === "PageUp") { e.preventDefault(); stepFloor(1); return; }
   if (e.key === "PageDown") { e.preventDefault(); stepFloor(-1); return; }
@@ -1704,7 +1911,8 @@ function buildProject(): ProjectFile {
     legend: legend.map(({ name, color }) => ({ name, color })),
     currentFloor: currentLevel,
     floors: floorData(),
-    images: Object.fromEntries([...new Set(floors.flatMap((f) => f.images.map((r) => r.id)))].map((id) => [id, imageStore.srcs.get(id)!])),
+    images: Object.fromEntries([...liveImageIds()].filter((id) => imageStore.has(id)).map((id) => [id, imageStore.srcs.get(id)!])),
+    customIcons,
   };
 }
 
@@ -1748,6 +1956,9 @@ function loadProject(p: ProjectFile) {
   cancelDraft();
   clearSelection();
   for (const [id, src] of Object.entries(p.images)) imageStore.set(id, src);
+  // 导入的自定义图标合并进图标库
+  for (const ci of p.customIcons) if (!customIcons.some((c) => c.id === ci.id)) customIcons = [...customIcons, ci];
+  renderIconPalette();
   loadFloors(p.floors, p.currentFloor);
   renderFloors();
   if (p.legend.length) {

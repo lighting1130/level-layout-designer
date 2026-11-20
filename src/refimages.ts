@@ -114,22 +114,24 @@ export function refImageRect(cam: Camera, r: RefImage) {
  * 读入用户选的图片文件：太大的缩到最长边 2048 像素，再编码成 data URL。
  * 返回 data URL 和像素尺寸。
  */
-export async function loadImageFile(file: Blob): Promise<{ src: string; width: number; height: number }> {
+export async function loadImageFile(file: Blob, maxSide = MAX_SIDE): Promise<{ src: string; width: number; height: number }> {
   const url = URL.createObjectURL(file);
   try {
     const img = new Image();
     img.src = url;
     await img.decode();
-    const scale = Math.min(1, MAX_SIDE / Math.max(img.naturalWidth, img.naturalHeight));
-    const width = Math.max(1, Math.round(img.naturalWidth * scale));
-    const height = Math.max(1, Math.round(img.naturalHeight * scale));
+    // 没写尺寸的 SVG 可能读不到大小，按正方形处理
+    const nw = img.naturalWidth || maxSide, nh = img.naturalHeight || maxSide;
+    const scale = Math.min(file.type === "image/svg+xml" ? maxSide / Math.max(nw, nh) : 1, maxSide / Math.max(nw, nh));
+    const width = Math.max(1, Math.round(nw * scale));
+    const height = Math.max(1, Math.round(nh * scale));
     const c = document.createElement("canvas");
     c.width = width;
     c.height = height;
     c.getContext("2d")!.drawImage(img, 0, 0, width, height);
     // 优先用 webp（体积小且保留透明）；不支持时 png 保留透明，其他用 jpeg
     let src = c.toDataURL("image/webp", 0.9);
-    if (!src.startsWith("data:image/webp")) src = file.type === "image/png" ? c.toDataURL("image/png") : c.toDataURL("image/jpeg", 0.9);
+    if (!src.startsWith("data:image/webp")) src = file.type === "image/jpeg" ? c.toDataURL("image/jpeg", 0.9) : c.toDataURL("image/png");
     return { src, width, height };
   } finally {
     URL.revokeObjectURL(url);

@@ -1,13 +1,15 @@
 import type { Cell } from "./cells";
 import { sanitizeVectors, type VectorShape } from "./vectors";
 import { sanitizeNotes, type Note } from "./notes";
+import { sanitizeCustomIcons, sanitizeIcons, type CustomIcon, type MapIcon } from "./icons";
 import { isImageDataUrl, sanitizeRefImages, type RefImage } from "./refimages";
 
 /** 工程文件格式（.json）。字段说明见 docs/project-file-format.md */
 export const PROJECT_FORMAT = "level-layout-designer";
 /**
  * 版本 3：内容按楼层保存在 floors 中。
- * 版本 4：新增参考图（顶层 images 存图片数据，floors[].images 存位置）。
+ * 版本 4：新增参考图（顶层 images 存图片数据，floors[].images 存位置）、
+ *         关卡图标（floors[].icons）和自定义图标库（customIcons）。
  * 版本 1/2 的文件（顶层 cells / vectors）导入时视为“第一层”。
  */
 export const PROJECT_VERSION = 4;
@@ -21,6 +23,8 @@ export interface FloorData {
   notes: Note[];
   /** 参考图的位置和设置（可选，旧文件没有） */
   images: RefImage[];
+  /** 关卡图标（可选，旧文件没有） */
+  icons: MapIcon[];
 }
 
 export interface ProjectFile {
@@ -35,6 +39,8 @@ export interface ProjectFile {
   floors: FloorData[];
   /** 参考图数据：id -> data URL */
   images: Record<string, string>;
+  /** 用户导入的图标库 */
+  customIcons: CustomIcon[];
 }
 
 const HEX = /^#[0-9a-f]{6}$/i;
@@ -55,10 +61,10 @@ export function sanitizeFloors(list: unknown, knownImage?: (id: string) => boole
     for (const f of list as any[]) {
       if (!f || !Number.isInteger(f.level) || f.level === 0 || seen.has(f.level)) continue;
       seen.add(f.level);
-      out.push({ level: f.level, cells: sanitizeCells(f.cells), vectors: sanitizeVectors(f.vectors), notes: sanitizeNotes(f.notes), images: sanitizeRefImages(f.images, knownImage) });
+      out.push({ level: f.level, cells: sanitizeCells(f.cells), vectors: sanitizeVectors(f.vectors), notes: sanitizeNotes(f.notes), images: sanitizeRefImages(f.images, knownImage), icons: sanitizeIcons(f.icons, knownImage) });
     }
   }
-  if (!out.length) out.push({ level: 1, cells: [], vectors: [], notes: [], images: [] });
+  if (!out.length) out.push({ level: 1, cells: [], vectors: [], notes: [], images: [], icons: [] });
   return out.sort((a, b) => b.level - a.level);
 }
 
@@ -102,6 +108,7 @@ export function parseProject(text: string): ProjectFile {
     currentFloor,
     floors,
     images,
+    customIcons: sanitizeCustomIcons(data.customIcons, known),
   };
 }
 

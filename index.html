@@ -34,6 +34,7 @@
       <button id="tool-arc" class="tool" data-tool="arc" title="弧线：设定起点和终点，再调弯曲 (A)"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 18C4 10 9 5 12 5s8 5 8 13"/><circle cx="4" cy="18" r="1.6"/><circle cx="20" cy="18" r="1.6"/></svg><span>弧线</span></button>
       <button id="tool-shape" class="tool" data-tool="shape" title="几何图形 (G)"><svg viewBox="0 0 24 24" aria-hidden="true"><rect x="3" y="11" width="9" height="9" rx="1"/><circle cx="16" cy="8" r="5"/></svg><span>图形</span></button>
       <button id="tool-note" class="tool" data-tool="note" title="备注：点击画布添加文字备注 (N)"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 4h14v11l-5 5H5z"/><path d="M14 20v-5h5"/><path d="M8 9h8M8 12h5"/></svg><span>备注</span></button>
+      <button id="tool-icon" class="tool" data-tool="icon" title="图标：楼梯、宝箱、陷阱、记录点等，点击画布放置 (I)"><svg viewBox="0 0 24 24" aria-hidden="true"><rect x="4" y="4" width="16" height="16" rx="3"/><path d="M8 16h3v-3h3v-3h3"/></svg><span>图标</span></button>
       <button id="tool-hand" class="tool" data-tool="hand" title="平移 (H，或按住空格拖拽)"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M8 13V5.5a1.5 1.5 0 0 1 3 0V12"/><path d="M11 11V4.5a1.5 1.5 0 0 1 3 0V12"/><path d="M14 11.5V6a1.5 1.5 0 0 1 3 0v8a6 6 0 0 1-6 6h-1a6 6 0 0 1-5-2.7L3.3 14a1.5 1.5 0 0 1 2.5-1.6L8 15"/></svg><span>平移</span></button>
       <div class="col-sep"></div>
       <div class="current-color" title="当前颜色（在右侧颜色说明里切换）"><span id="current-swatch"></span></div>
@@ -60,6 +61,25 @@
         <input id="shape-sides" type="number" min="3" max="64" step="1" value="5" aria-label="多边形边数" />
         <button id="sides-inc" aria-label="增加边数">+</button>
         <span>边</span>
+      </div>
+      <div id="icon-options" class="opt-col" hidden>
+        <div class="opt-row"><span class="opt-label">图标</span><strong id="icon-name" class="icon-name"></strong></div>
+        <div id="icon-grid" class="icon-grid" role="group" aria-label="选择图标"></div>
+        <div id="icon-custom-row" class="opt-row" hidden>
+          <input id="icon-rename" type="text" maxlength="40" aria-label="自定义图标名称" title="修改这个自定义图标的名字" />
+          <button id="icon-remove" class="danger-text" title="从图标库移除（画布上已放的不受影响）">移除</button>
+        </div>
+        <div class="opt-row">
+          <button id="icon-import" title="用自己的图片（PNG / SVG / JPG / WebP）做图标，可一次选多张">+ 导入图标</button>
+          <input id="file-icon" type="file" accept="image/png,image/svg+xml,image/jpeg,image/webp,image/gif" multiple hidden />
+        </div>
+        <div class="opt-row" title="图标边长，单位是当前笔刷格子">
+          <span class="opt-label">大小</span>
+          <button id="icon-dec" aria-label="缩小图标">−</button>
+          <input id="icon-size" type="number" min="1" max="20" step="1" value="2" aria-label="图标大小（格）" />
+          <button id="icon-inc" aria-label="放大图标">+</button>
+          <span>格</span>
+        </div>
       </div>
       <div id="stroke-options" class="opt-col stroke" hidden>
         <div class="opt-row">
