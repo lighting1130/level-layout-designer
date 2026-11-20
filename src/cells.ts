@@ -69,6 +69,11 @@ export class CellLayer {
     return inverse;
   }
 
+  /** 把所有 from 颜色的格子改为 to 颜色（颜色说明里改色时使用） */
+  recolor(from: string, to: string) {
+    for (const c of this.cells.values()) if (c.color === from) c.color = to;
+  }
+
   clear(change: Change) {
     for (const id of [...this.cells.keys()]) {
       this.record(change, id);

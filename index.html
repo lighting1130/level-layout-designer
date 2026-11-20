@@ -15,17 +15,26 @@
         <button id="tool-hand" class="tool" data-tool="hand" title="平移 (H，或按住空格拖拽)">平移</button>
       </div>
       <div class="sep"></div>
-      <div class="group palette" id="palette" role="group" aria-label="调色板"></div>
-      <label class="custom" title="自定义颜色">
-        <input id="color-custom" type="color" value="#ff8800" />
-      </label>
-      <div class="sep"></div>
       <div class="group">
         <button id="btn-undo" title="撤销 (Ctrl+Z)">撤销</button>
         <button id="btn-redo" title="重做 (Ctrl+Shift+Z)">重做</button>
         <button id="btn-clear" title="清空画布（可撤销）">清空</button>
       </div>
     </div>
+    <aside class="legend" id="legend" aria-label="颜色说明">
+      <div class="legend-head">
+        <strong>颜色说明</strong>
+        <button id="legend-toggle" aria-expanded="true" title="收起/展开">收起</button>
+      </div>
+      <div class="legend-body">
+        <div id="legend-list" class="legend-list"></div>
+        <div class="legend-actions">
+          <button id="legend-add" title="添加一个新颜色">+ 添加颜色</button>
+          <button id="legend-reset" title="恢复默认的颜色和说明（不影响已画的格子）">恢复默认</button>
+        </div>
+        <p class="legend-tip">点色块改颜色，点文字改说明。改颜色时，画布上用这个颜色的格子会一起变。</p>
+      </div>
+    </aside>
     <div class="hud">
       <span id="hud-brush">笔刷: 1 格</span>
       <span id="hud-cell">格子: 0, 0</span>
@@ -34,7 +43,7 @@
       <button id="btn-zoom-in" title="放大 (+)">+</button>
       <button id="btn-reset" title="回到原点 (0)">复位</button>
     </div>
-    <div class="help">左键涂色 · 空格/右键/中键拖拽平移 · 滚轮缩放（放大后笔刷自动变细） · 1-9 选色</div>
+    <div class="help">左键涂色 · 空格/右键/中键拖拽平移 · 滚轮缩放（放大后笔刷自动变细） · 右侧点颜色或按 1-9 选色</div>
     <script type="module" src="/src/main.ts"></script>
   </body>
 </html>

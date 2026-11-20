@@ -16,9 +16,10 @@ let height = 0;
 let dirty = true;
 const requestRender = () => { dirty = true; };
 
-// ---------------- 调色板 ----------------
-/** 预设颜色按关卡元素命名，按 1-9 快速切换 */
-const PALETTE: { name: string; color: string }[] = [
+// ---------------- 颜色说明（右侧面板，可编辑） ----------------
+interface LegendEntry { id: number; name: string; color: string }
+/** 默认按关卡元素命名，用户可以改名、改色、增删；按 1-9 快速切换前 9 个 */
+const DEFAULT_LEGEND: Omit<LegendEntry, "id">[] = [
   { name: "墙体", color: "#8b93a3" },
   { name: "地面", color: "#c9b48a" },
   { name: "草地", color: "#5fa45a" },
@@ -29,32 +30,144 @@ const PALETTE: { name: string; color: string }[] = [
   { name: "敌人", color: "#d9455f" },
   { name: "道具/机关", color: "#4fc1b5" },
 ];
-let currentColor = PALETTE[0].color;
-const paletteEl = $("palette");
-const customInput = $("color-custom") as HTMLInputElement;
-const customLabel = customInput.parentElement!;
-
-PALETTE.forEach((p, idx) => {
-  const b = document.createElement("button");
-  b.className = "swatch";
-  b.style.background = p.color;
-  b.title = `${p.name} (${idx + 1})`;
-  b.setAttribute("aria-label", p.name);
-  b.dataset.color = p.color;
-  b.addEventListener("click", () => selectColor(p.color));
-  paletteEl.appendChild(b);
-});
-customInput.addEventListener("input", () => selectColor(customInput.value, true));
-customInput.addEventListener("click", () => selectColor(customInput.value, true));
-
-function selectColor(color: string, custom = false) {
-  currentColor = color;
-  for (const b of paletteEl.querySelectorAll<HTMLButtonElement>(".swatch")) {
-    b.setAttribute("aria-pressed", String(!custom && b.dataset.color === color));
+const LEGEND_KEY = "level-layout-designer.legend.v1";
+let nextId = 1;
+let legend: LegendEntry[] = DEFAULT_LEGEND.map((e) => ({ ...e, id: nextId++ }));
+try {
+  const raw = localStorage.getItem(LEGEND_KEY);
+  const saved = raw ? JSON.parse(raw) : null;
+  if (Array.isArray(saved) && saved.length) {
+    legend = saved
+      .filter((e) => e && typeof e.name === "string" && /^#[0-9a-f]{6}$/i.test(e.color))
+      .map((e) => ({ id: nextId++, name: e.name, color: e.color.toLowerCase() }));
   }
-  customLabel.classList.toggle("active", custom);
+} catch { /* 忽略 */ }
+let selectedId = legend[0]?.id ?? 0;
+let currentColor = legend[0]?.color ?? "#8b93a3";
+
+const legendList = $("legend-list");
+const legendPanel = $("legend");
+
+function saveLegend() {
+  try { localStorage.setItem(LEGEND_KEY, JSON.stringify(legend.map(({ name, color }) => ({ name, color })))); } catch { /* 忽略 */ }
+}
+
+function selectEntry(id: number) {
+  const e = legend.find((x) => x.id === id);
+  if (!e) return;
+  selectedId = id;
+  currentColor = e.color;
+  for (const row of legendList.querySelectorAll<HTMLElement>(".legend-row")) {
+    row.classList.toggle("selected", Number(row.dataset.id) === id);
+  }
   if (tool === "eraser") setTool("brush");
   requestRender();
+}
+
+/** 修改某个颜色时，把画布上（以及撤销记录里）用这个颜色的格子一起改掉，保持图例和画面一致 */
+function recolor(from: string, to: string) {
+  if (from === to) return;
+  layer.recolor(from, to);
+  for (const stack of [undoStack, redoStack]) {
+    for (const ch of stack) for (const c of ch.values()) if (c && c.color === from) c.color = to;
+  }
+  save();
+  requestRender();
+}
+
+function renderLegend() {
+  legendList.replaceChildren();
+  legend.forEach((e, idx) => {
+    const row = document.createElement("div");
+    row.className = "legend-row";
+    row.dataset.id = String(e.id);
+    row.classList.toggle("selected", e.id === selectedId);
+    row.addEventListener("pointerdown", () => selectEntry(e.id));
+
+    const sw = document.createElement("label");
+    sw.className = "legend-swatch";
+    sw.style.background = e.color;
+    sw.title = "点击修改颜色";
+    const ci = document.createElement("input");
+    ci.type = "color";
+    ci.value = e.color;
+    ci.id = `legend-color-${e.id}`;
+    ci.setAttribute("aria-label", `${e.name} 的颜色`);
+    ci.addEventListener("input", () => {
+      const to = ci.value.toLowerCase();
+      recolor(e.color, to);
+      e.color = to;
+      sw.style.background = to;
+      if (selectedId === e.id) currentColor = to;
+      saveLegend();
+    });
+    sw.appendChild(ci);
+
+    const name = document.createElement("input");
+    name.type = "text";
+    name.className = "legend-name";
+    name.id = `legend-name-${e.id}`;
+    name.value = e.name;
+    name.placeholder = "说明";
+    name.setAttribute("aria-label", "颜色说明");
+    name.addEventListener("input", () => { e.name = name.value; saveLegend(); });
+    name.addEventListener("keydown", (ev) => { if (ev.key === "Enter" || ev.key === "Escape") name.blur(); });
+
+    const key = document.createElement("span");
+    key.className = "legend-key";
+    key.textContent = idx < 9 ? String(idx + 1) : "";
+
+    const del = document.createElement("button");
+    del.className = "legend-del";
+    del.textContent = "×";
+    del.title = "删除这个颜色（已画的格子保留）";
+    del.setAttribute("aria-label", `删除 ${e.name}`);
+    del.disabled = legend.length <= 1;
+    del.addEventListener("click", (ev) => {
+      ev.stopPropagation();
+      legend = legend.filter((x) => x.id !== e.id);
+      if (selectedId === e.id) { selectedId = legend[0].id; currentColor = legend[0].color; }
+      saveLegend();
+      renderLegend();
+    });
+
+    row.append(sw, name, key, del);
+    legendList.appendChild(row);
+  });
+}
+
+$("legend-add").addEventListener("click", () => {
+  // 新颜色取一个色相与现有颜色尽量不同的颜色
+  const hue = (legend.length * 137.5) % 360;
+  const color = hslToHex(hue, 55, 60);
+  const e = { id: nextId++, name: `新颜色 ${legend.length + 1}`, color };
+  legend.push(e);
+  saveLegend();
+  renderLegend();
+  selectEntry(e.id);
+  const input = document.getElementById(`legend-name-${e.id}`) as HTMLInputElement | null;
+  input?.focus();
+  input?.select();
+});
+$("legend-reset").addEventListener("click", () => {
+  legend = DEFAULT_LEGEND.map((e) => ({ ...e, id: nextId++ }));
+  saveLegend();
+  renderLegend();
+  selectEntry(legend[0].id);
+});
+$("legend-toggle").addEventListener("click", () => {
+  const collapsed = legendPanel.classList.toggle("collapsed");
+  $("legend-toggle").textContent = collapsed ? "展开" : "收起";
+  $("legend-toggle").setAttribute("aria-expanded", String(!collapsed));
+});
+if (window.innerWidth < 640) $("legend-toggle").click();
+
+function hslToHex(h: number, s: number, l: number): string {
+  s /= 100; l /= 100;
+  const k = (n: number) => (n + h / 30) % 12;
+  const a = s * Math.min(l, 1 - l);
+  const f = (n: number) => l - a * Math.max(-1, Math.min(k(n) - 3, 9 - k(n), 1));
+  return "#" + [f(0), f(8), f(4)].map((x) => Math.round(x * 255).toString(16).padStart(2, "0")).join("");
 }
 
 // ---------------- 工具 ----------------
@@ -117,12 +230,17 @@ $("btn-clear").addEventListener("click", () => {
 // ---------------- 本地保存（刷新页面不丢） ----------------
 const STORAGE_KEY = "level-layout-designer.cells.v1";
 let saveTimer = 0;
+function flushSave() {
+  clearTimeout(saveTimer);
+  saveTimer = 0;
+  try { localStorage.setItem(STORAGE_KEY, JSON.stringify(layer.toJSON())); } catch { /* 存储不可用时忽略 */ }
+}
 function save() {
   clearTimeout(saveTimer);
-  saveTimer = window.setTimeout(() => {
-    try { localStorage.setItem(STORAGE_KEY, JSON.stringify(layer.toJSON())); } catch { /* 存储不可用时忽略 */ }
-  }, 300);
+  saveTimer = window.setTimeout(flushSave, 300);
 }
+// 关闭或刷新页面前立即保存，避免丢失最后一笔
+window.addEventListener("pagehide", () => { if (saveTimer) flushSave(); });
 try {
   const raw = localStorage.getItem(STORAGE_KEY);
   if (raw) layer.load(JSON.parse(raw));
@@ -381,8 +499,8 @@ window.addEventListener("keydown", (e) => {
   else if (e.key === "e" || e.key === "E") setTool("eraser");
   else if (e.key === "h" || e.key === "H") setTool("hand");
   else if (/^[1-9]$/.test(e.key)) {
-    const p = PALETTE[Number(e.key) - 1];
-    if (p) selectColor(p.color);
+    const entry = legend[Number(e.key) - 1];
+    if (entry) selectEntry(entry.id);
   }
 });
 window.addEventListener("keyup", (e) => {
@@ -403,7 +521,8 @@ window.addEventListener("resize", () => {
 });
 
 setTool("brush");
-selectColor(PALETTE[0].color);
+renderLegend();
+selectEntry(selectedId);
 afterEdit();
 resize();
 resetView();
