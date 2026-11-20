@@ -27,6 +27,29 @@ button:focus-visible, .swatch:focus-visible, .custom:focus-within { outline: 2px
 button:disabled { opacity: 0.4; cursor: default; }
 .tool[aria-pressed="true"] { background: #3d5a99; border-color: #7aa2f7; color: #fff; }
 
+.toolcol {
+  position: fixed; left: 12px; top: 64px; width: 60px; box-sizing: border-box; padding: 6px;
+  display: flex; flex-direction: column; gap: 4px; align-items: stretch;
+  background: rgba(30, 33, 39, 0.92); border: 1px solid #3a3f4b; border-radius: 8px; user-select: none;
+  max-height: calc(100% - 140px); overflow-y: auto;
+}
+.toolcol .tool {
+  height: auto; padding: 6px 0 4px; display: flex; flex-direction: column; align-items: center; gap: 2px;
+  font-size: 12px; background: transparent; border-color: transparent;
+}
+.toolcol .tool:hover { background: #2c313a; }
+.toolcol .tool[aria-pressed="true"] { background: #3d5a99; border-color: #7aa2f7; }
+.toolcol svg { width: 22px; height: 22px; fill: none; stroke: currentColor; stroke-width: 1.7; stroke-linecap: round; stroke-linejoin: round; }
+.col-sep { height: 1px; background: #3a3f4b; margin: 2px 0; }
+.current-color { display: flex; justify-content: center; padding: 4px 0; }
+#current-swatch { width: 28px; height: 28px; border-radius: 6px; border: 2px solid #fff; box-shadow: 0 0 0 1px rgba(0,0,0,0.4); }
+.tool-options {
+  position: fixed; left: 80px; top: 64px; padding: 10px 12px; display: flex; flex-direction: column; gap: 8px;
+  background: rgba(30, 33, 39, 0.94); border: 1px solid #3a3f4b; border-radius: 8px; user-select: none;
+}
+.opt-col { display: flex; flex-direction: column; gap: 8px; }
+.opt-row { display: flex; align-items: center; gap: 6px; }
+.opt-label { width: 32px; opacity: 0.7; }
 .legend {
   position: fixed; right: 12px; top: 12px; width: 232px; max-height: calc(100% - 96px);
   display: flex; flex-direction: column; box-sizing: border-box;
@@ -94,3 +117,11 @@ select {
 .toast.error { border-color: #d9455f; background: #3a2328; }
 .help { position: fixed; left: 12px; bottom: 12px; opacity: 0.6; user-select: none; pointer-events: none; }
 @media (max-width: 760px) { .help { display: none; } }
+@media (max-width: 640px) {
+  .toolbar { flex-wrap: nowrap; overflow-x: auto; right: 12px; }
+  .project-name { width: 96px; flex: none; }
+  .toolbar .group { flex-wrap: nowrap; flex: none; }
+  .toolbar button { flex: none; }
+  .legend { top: auto; bottom: 64px; max-height: 50%; }
+  .hint { top: auto; bottom: 112px; white-space: normal; max-width: calc(100% - 100px); }
+}

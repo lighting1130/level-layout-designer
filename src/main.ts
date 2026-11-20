@@ -12,6 +12,7 @@ const hudCell = $("hud-cell");
 const hudZoom = $("hud-zoom");
 const hudBrush = $("hud-brush");
 const hintEl = $("hint");
+const currentSwatch = $("current-swatch");
 
 const cam = new Camera();
 const layer = new CellLayer();
@@ -187,6 +188,7 @@ function setTool(t: Tool) {
   if (t !== tool) cancelDraft();
   tool = t;
   shapeOptions.hidden = t !== "shape";
+  $("tool-options").hidden = t !== "shape" && t !== "arc";
   strokeOptions.hidden = t !== "shape" && t !== "arc";
   for (const b of document.querySelectorAll<HTMLButtonElement>(".tool")) {
     b.setAttribute("aria-pressed", String(b.dataset.tool === t));
@@ -399,6 +401,7 @@ function frame() {
     drawVectors(ctx, cam, vectors);
     drawDraft();
     drawHover();
+    currentSwatch.style.background = currentColor;
     const hint = draftHint();
     hintEl.textContent = hint;
     hintEl.hidden = !hint;
