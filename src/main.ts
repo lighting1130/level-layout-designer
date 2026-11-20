@@ -1,7 +1,7 @@
 import { Camera } from "./camera";
 import { CELL_SIZE, SUBDIVISION, brushLevel, drawBackground, drawGrid, finestLevel, levelStep } from "./grid";
 import { CellLayer, type Change } from "./cells";
-import { MAX_SHAPE_CELLS, SHAPE_LABELS, TooManyCellsError, arcPoints, rasterizeFill, rasterizeStroke, shapePolygon, type CellIJ, type Pt, type ShapeKind } from "./shapes";
+import { MAX_SHAPE_CELLS, SHAPE_LABELS, TooManyCellsError, arcPoints, rasterizeFill, rasterizeThickStroke, shapePolygon, type CellIJ, type Pt, type ShapeKind } from "./shapes";
 import { PROJECT_FORMAT, PROJECT_VERSION, parseProject, projectFileName, type ProjectFile } from "./project";
 
 const canvas = document.getElementById("canvas") as HTMLCanvasElement;
@@ -182,6 +182,7 @@ function setTool(t: Tool) {
   if (t !== tool) cancelDraft();
   tool = t;
   shapeOptions.hidden = t !== "shape";
+  strokeOptions.hidden = t !== "shape" && t !== "arc";
   for (const b of document.querySelectorAll<HTMLButtonElement>(".tool")) {
     b.setAttribute("aria-pressed", String(b.dataset.tool === t));
   }
@@ -206,6 +207,26 @@ for (const [k, label] of Object.entries(SHAPE_LABELS)) {
 shapeKindSel.value = "rect";
 shapeKindSel.addEventListener("change", () => { setTool("shape"); shapeKindSel.blur(); });
 shapeFill.addEventListener("change", () => { shapeFill.blur(); setTool("shape"); updateDraftCells(); requestRender(); });
+
+// 线条粗细（弧线和图形共用），单位是当前笔刷格子
+const strokeOptions = $("stroke-options");
+const strokeInput = $("stroke-width") as HTMLInputElement;
+const STROKE_KEY = "level-layout-designer.stroke.v1";
+let strokeWidth = 1;
+try { strokeWidth = clampStroke(Number(localStorage.getItem(STROKE_KEY)) || 1); } catch { /* 忽略 */ }
+strokeInput.value = String(strokeWidth);
+function clampStroke(n: number) { return Math.max(1, Math.min(99, Math.round(n) || 1)); }
+function setStroke(n: number) {
+  strokeWidth = clampStroke(n);
+  strokeInput.value = String(strokeWidth);
+  try { localStorage.setItem(STROKE_KEY, String(strokeWidth)); } catch { /* 忽略 */ }
+  updateDraftCells();
+  requestRender();
+}
+strokeInput.addEventListener("change", () => { setStroke(Number(strokeInput.value)); strokeInput.blur(); });
+strokeInput.addEventListener("keydown", (e) => { if (e.key === "Enter" || e.key === "Escape") strokeInput.blur(); });
+$("stroke-dec").addEventListener("click", () => setStroke(strokeWidth - 1));
+$("stroke-inc").addEventListener("click", () => setStroke(strokeWidth + 1));
 
 // ---------------- 撤销 / 重做 ----------------
 const undoStack: Change[] = [];
@@ -436,9 +457,14 @@ function updateDraftCells() {
   const s = levelStep(draft.k);
   const g = draftGeometry(draft);
   try {
-    draft.cells = draft.kind !== "arc" && draft.kind !== "line" && shapeFill.checked && g.closed
-      ? rasterizeFill(g.pts, s)
-      : rasterizeStroke(g.pts, g.closed, s);
+    // 线条按设定的粗细绘制；勾选“填充”时内部也填满
+    const outline = rasterizeThickStroke(g.pts, g.closed, s, strokeWidth);
+    if (draft.kind !== "arc" && draft.kind !== "line" && shapeFill.checked && g.closed) {
+      const seen = new Set(outline.map((c) => c.i + "," + c.j));
+      draft.cells = outline.concat(rasterizeFill(g.pts, s).filter((c) => !seen.has(c.i + "," + c.j)));
+    } else {
+      draft.cells = outline;
+    }
     draft.tooMany = false;
   } catch (err) {
     if (!(err instanceof TooManyCellsError)) throw err;
@@ -679,6 +705,8 @@ window.addEventListener("keydown", (e) => {
   else if (e.key === "e" || e.key === "E") setTool("eraser");
   else if (e.key === "h" || e.key === "H") setTool("hand");
   else if (e.key === "a" || e.key === "A") setTool("arc");
+  else if (e.key === "[") setStroke(strokeWidth - 1);
+  else if (e.key === "]") setStroke(strokeWidth + 1);
   else if (e.key === "g" || e.key === "G") setTool("shape");
   else if (/^[1-9]$/.test(e.key)) {
     const entry = legend[Number(e.key) - 1];

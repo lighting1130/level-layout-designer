@@ -123,6 +123,42 @@ export function rasterizeStroke(pts: Pt[], closed: boolean, s: number): CellIJ[]
   return out;
 }
 
+/**
+ * 指定粗细（单位：格子数）的线条：格子中心到折线的距离不超过粗细的一半即涂色。
+ * 粗细为 1 时与 rasterizeStroke 相同；更粗时以几何线为中心向两侧加宽。
+ */
+export function rasterizeThickStroke(pts: Pt[], closed: boolean, s: number, thickness: number): CellIJ[] {
+  const out = rasterizeStroke(pts, closed, s);
+  if (thickness <= 1) return out;
+  const seen = new Set(out.map((c) => c.i + "," + c.j));
+  const r = (thickness * s) / 2;
+  const r2 = r * r;
+  const segs = closed ? pts.length : pts.length - 1;
+  const segList: [Pt, Pt][] = pts.length === 1 ? [[pts[0], pts[0]]] : [];
+  for (let n = 0; n < segs; n++) segList.push([pts[n], pts[(n + 1) % pts.length]]);
+  for (const [p, q] of segList) {
+    const i0 = Math.floor((Math.min(p.x, q.x) - r) / s), i1 = Math.floor((Math.max(p.x, q.x) + r) / s);
+    const j0 = Math.floor((Math.min(p.y, q.y) - r) / s), j1 = Math.floor((Math.max(p.y, q.y) + r) / s);
+    const dx = q.x - p.x, dy = q.y - p.y;
+    const len2 = dx * dx + dy * dy;
+    for (let j = j0; j <= j1; j++) {
+      for (let i = i0; i <= i1; i++) {
+        const cx = (i + 0.5) * s, cy = (j + 0.5) * s;
+        let t = len2 ? ((cx - p.x) * dx + (cy - p.y) * dy) / len2 : 0;
+        t = Math.max(0, Math.min(1, t));
+        const ex = p.x + dx * t - cx, ey = p.y + dy * t - cy;
+        if (ex * ex + ey * ey > r2) continue;
+        const key = i + "," + j;
+        if (seen.has(key)) continue;
+        seen.add(key);
+        out.push({ i, j });
+        if (out.length > MAX_SHAPE_CELLS) throw new TooManyCellsError();
+      }
+    }
+  }
+  return out;
+}
+
 /** 多边形内部（格子中心在多边形内）的所有格子，加上边框经过的格子 */
 export function rasterizeFill(pts: Pt[], s: number): CellIJ[] {
   let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;

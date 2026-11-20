@@ -23,7 +23,14 @@
         <button id="tool-shape" class="tool" data-tool="shape" title="几何图形 (G)">图形</button>
         <span id="shape-options" class="group" hidden>
           <select id="shape-kind" aria-label="图形类型"></select>
-          <label class="check"><input id="shape-fill" type="checkbox" checked /> 填充</label>
+          <label class="check" title="勾选后内部也填满颜色"><input id="shape-fill" type="checkbox" /> 填充</label>
+        </span>
+        <span id="stroke-options" class="group stroke" hidden title="弧线和图形的线条粗细，单位是当前笔刷格子（[ 和 ] 键调整）">
+          <span>粗细</span>
+          <button id="stroke-dec" aria-label="变细">−</button>
+          <input id="stroke-width" type="number" min="1" max="99" step="1" value="1" aria-label="线条粗细（格）" />
+          <button id="stroke-inc" aria-label="变粗">+</button>
+          <span>格</span>
         </span>
         <button id="tool-hand" class="tool" data-tool="hand" title="平移 (H，或按住空格拖拽)">平移</button>
       </div>
