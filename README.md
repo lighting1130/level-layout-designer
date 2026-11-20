@@ -16,7 +16,6 @@
 
 👉 **[打开关卡 Layout 设计器](https://lighting1130.github.io/level-layout-designer/)**（GitHub Pages）
 
-备用链接：[claude.ai 上的在线版](https://claude.ai/artifact/DDRPnUQsS3sF98zEyHz8RZ)
 
 ![界面总览](docs/images/overview.png)
 
