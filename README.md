@@ -1,5 +1,7 @@
 # Level Layout Designer · 关卡设计 Layout 画图工具
 
+**中文** | [English](README.en.md)
+
 一个用于游戏关卡设计的 layout（布局）画图工具，帮助关卡策划快速绘制、迭代和分享关卡平面布局图。
 
 ## 项目目标
@@ -82,7 +84,7 @@ npm run build    # 类型检查 + 生产构建到 dist/
 npm run build:single   # 再打包成一个独立文件 release/level-layout-designer.html
 ```
 
-改完代码后运行 `npm run build:single`，把新的 `release/level-layout-designer.html` 一起提交，离线版和在线版就会更新。
+改完代码后运行 `npm run build:single`，把新的 `release/level-layout-designer.html` 一起提交，离线版就会更新（在线链接需要另外重新发布）。
 
 ## 技术栈
 
