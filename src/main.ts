@@ -70,6 +70,8 @@ function selectEntry(id: number) {
     row.classList.toggle("selected", Number(row.dataset.id) === id);
   }
   if (tool === "eraser") setTool("brush");
+  // 框选着内容时选颜色：把选中的格子和线条换成这个颜色
+  if (selection && tool === "select") recolorSelection(e.color, e.name);
   requestRender();
 }
 
@@ -1311,6 +1313,30 @@ function moveSelection(dx: number, dy: number) {
   requestRender();
 }
 
+/** 把选中的格子和平滑图形改成 color（备注不变），可撤销 */
+function recolorSelection(color: string, name: string) {
+  if (!selection) return;
+  const change: Change = new Map();
+  const cells = selection.cells.map((c) => {
+    if (c.color !== color) layer.paint(c.k, c.i, c.j, color, change);
+    return { ...c, color };
+  });
+  let before: VectorShape[] | undefined;
+  let vecs = selection.vectors;
+  if (vecs.some((v) => v.color !== color)) {
+    before = vectors;
+    const map = new Map(vecs.map((v) => [v, { ...v, color }]));
+    vectors = vectors.map((v) => map.get(v) ?? v);
+    vecs = vecs.map((v) => map.get(v)!);
+  }
+  if (!change.size && !before) return;
+  const step = selection.step;
+  commit(change, before);
+  selection = makeSelection(cells, vecs, selection.notes);
+  if (selection) selection.step = step;
+  toast(`已把选中的 ${cells.length + vecs.length} 项改成「${name}」`);
+}
+
 function deleteSelection() {
   if (!selection) return;
   const change: Change = new Map();
@@ -1511,7 +1537,7 @@ function endPointer(e: PointerEvent) {
   if (pointers.size === 0 && mode === "marquee" && marquee) {
     selectInRect(marquee.a, marquee.b);
     marquee = null;
-    if (selection) toast(`已选中 ${selection.cells.length + selection.vectors.length + selection.notes.length} 项：拖动移动，Delete 删除`);
+    if (selection) toast(`已选中 ${selection.cells.length + selection.vectors.length + selection.notes.length} 项：拖动移动，点右侧颜色换色，Delete 删除`);
   } else if (pointers.size === 0 && mode === "imgDrag") {
     endImageDrag();
   } else if (pointers.size === 0 && mode === "noteDrag") {
