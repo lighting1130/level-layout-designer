@@ -99,6 +99,15 @@ namespace LevelLayout
 		double LiquidDepthM = 0.1;
 		double ArcSegmentM = 1.0;
 		TArray<int32> Levels; // empty = all
+
+		bool bCutDoors = true; // door / locked icons cut an opening into the wall they sit on
+		double DoorWidthM = 2.0;
+		double DoorHeightM = 3.0;
+
+		bool bBuildStairs = true; // stairs-up / stairs-down icons build straight stairs to the next level
+		double StairWidthM = 2.0;
+		double StairMaxRiserM = 0.2;
+		double StairTreadM = 0.3;
 	};
 
 	/** A box to place: center and full size in cm, yaw in degrees. */
@@ -113,6 +122,27 @@ namespace LevelLayout
 		bool bFromVector = false;
 	};
 
+	/** A filled non-rectangular shape: a vertical prism over a convex outline. */
+	struct FMeshItem
+	{
+		FString Role;
+		FString Color;
+		int32 Level = 1;
+		TArray<FVector2D> Points; // outline in cm (UE X / Y), convex
+		double ZBottom = 0;
+		double Height = 0;
+	};
+
+	/** Water (PhysicsVolume) or hazard (PainCausingVolume) over a liquid slab. */
+	struct FVolumeItem
+	{
+		FString Role; // water or hazard
+		int32 Level = 1;
+		FVector Center = FVector::ZeroVector;
+		FVector Size = FVector::ZeroVector;
+		double Yaw = 0;
+	};
+
 	struct FMarkerItem
 	{
 		FString Kind;
@@ -121,6 +151,9 @@ namespace LevelLayout
 		FVector Location = FVector::ZeroVector; // on the floor surface
 		double SizeCm = 100;
 		double Yaw = 0;
+		/** Built as geometry (door opening, stairs): only the label is placed, this high above the floor (cm). */
+		bool bBuilt = false;
+		double LabelHeightCm = 0;
 	};
 
 	struct FNoteItem
@@ -137,6 +170,8 @@ namespace LevelLayout
 		TArray<FBoxItem> Boxes;
 		TArray<FMarkerItem> Markers;
 		TArray<FNoteItem> Notes;
+		TArray<FMeshItem> Meshes;
+		TArray<FVolumeItem> Volumes;
 		TMap<int32, double> LevelZ; // cm
 		TArray<FString> Warnings;
 
@@ -169,6 +204,13 @@ namespace LevelLayout
 	bool ArcCircle(const FVector2D& A, const FVector2D& B, const FVector2D& Bend, FVector2D& OutCenter, double& OutR, double& OutT0, double& OutSweep);
 
 	FPlan BuildPlan(const FProject& Project, const FPlanSettings& Settings);
+
+	/**
+	 * Subtract an oriented box (center, full size, yaw) from Box. Works when the yaws differ by a multiple of 90 degrees.
+	 * Returns false when they do not overlap or cannot be cut (Box unchanged); otherwise OutPieces holds what is left
+	 * (possibly nothing).
+	 */
+	bool SubtractBox(const FBoxItem& Box, const FVector& CutCenter, const FVector& CutSize, double CutYaw, TArray<FBoxItem>& OutPieces);
 
 	FString LevelLabel(int32 Level);
 }

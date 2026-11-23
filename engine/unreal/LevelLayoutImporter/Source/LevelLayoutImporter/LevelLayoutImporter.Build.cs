@@ -29,6 +29,9 @@ public class LevelLayoutImporter : ModuleRules
 			"AssetTools",
 			"NavigationSystem",
 			"Projects",
+			"MeshDescription",
+			"StaticMeshDescription",
+			"PhysicsCore",
 			"EditorSubsystem",
 		});
 	}

@@ -678,10 +678,14 @@ namespace LevelLayout
 		double Cx, Cy, Length, Width, Yaw;
 	};
 
-	/** Smooth shape -> boxes in cm. Returns false when the shape is not supported yet (filled non-rect). */
-	static bool VectorBoxes(const FVectorShape& V, double W2Cm, const FPlanSettings& S, TArray<FFlatBox>& Out)
+	/**
+	 * Smooth shape -> boxes in cm. A filled shape that is not a rectangle goes to OutPolygon (cm) instead.
+	 * Returns false when the shape cannot be built.
+	 */
+	static bool VectorBoxes(const FVectorShape& V, double W2Cm, const FPlanSettings& S, TArray<FFlatBox>& Out, TArray<FVector2D>& OutPolygon)
 	{
 		Out.Reset();
+		OutPolygon.Reset();
 		const double Width = V.Width;
 		if (!(Width > 0))
 		{
@@ -698,7 +702,16 @@ namespace LevelLayout
 		{
 			if (V.Kind != TEXT("rect"))
 			{
-				return false;
+				// Every filled kind except rect (ellipse, triangle, diamond, hexagon, regular polygon) is convex.
+				if (Pts.Num() < 3)
+				{
+					return false;
+				}
+				for (const FVector2D& P : Pts)
+				{
+					OutPolygon.Add(P * W2Cm);
+				}
+				return true;
 			}
 			FBox2D Bx(ForceInit);
 			for (const FVector2D& P : Pts)
@@ -728,6 +741,299 @@ namespace LevelLayout
 		return true;
 	}
 
+	// ---------- Box cutting ----------
+
+	static FVector2D Rot2(const FVector2D& V, double YawDeg)
+	{
+		const double T = FMath::DegreesToRadians(YawDeg);
+		const double C = FMath::Cos(T), Sn = FMath::Sin(T);
+		return FVector2D(V.X * C - V.Y * Sn, V.X * Sn + V.Y * C);
+	}
+
+	bool SubtractBox(const FBoxItem& Box, const FVector& CutCenter, const FVector& CutSize, double CutYaw, TArray<FBoxItem>& OutPieces)
+	{
+		OutPieces.Reset();
+		// Work in the box's local frame. The cut must be axis-aligned there.
+		double D = FMath::Fmod(CutYaw - Box.Yaw, 360.0);
+		if (D < 0)
+		{
+			D += 360.0;
+		}
+		const double Quarter = D / 90.0;
+		const int32 Q = FMath::RoundToInt(Quarter);
+		if (FMath::Abs(Quarter - Q) > 0.001)
+		{
+			return false;
+		}
+		FVector CutHalf = CutSize / 2;
+		if (Q % 2 == 1)
+		{
+			Swap(CutHalf.X, CutHalf.Y);
+		}
+		const FVector2D L = Rot2(FVector2D(CutCenter.X - Box.Center.X, CutCenter.Y - Box.Center.Y), -Box.Yaw);
+		const FVector LocalC(L.X, L.Y, CutCenter.Z - Box.Center.Z);
+		const FVector BHalf = Box.Size / 2;
+		const FVector BMin = -BHalf, BMax = BHalf;
+		const FVector CMin = LocalC - CutHalf, CMax = LocalC + CutHalf;
+		constexpr double Eps = 0.01;
+		for (int32 A = 0; A < 3; ++A)
+		{
+			if (CMax[A] <= BMin[A] + Eps || CMin[A] >= BMax[A] - Eps)
+			{
+				return false; // no overlap
+			}
+		}
+		auto AddPiece = [&](FVector Lo, FVector Hi)
+		{
+			const FVector Size = Hi - Lo;
+			if (Size.X < 0.5 || Size.Y < 0.5 || Size.Z < 0.5)
+			{
+				return; // slivers
+			}
+			const FVector LocalCenter = (Lo + Hi) / 2;
+			const FVector2D W = Rot2(FVector2D(LocalCenter.X, LocalCenter.Y), Box.Yaw);
+			FBoxItem Piece = Box;
+			Piece.Center = FVector(Box.Center.X + W.X, Box.Center.Y + W.Y, Box.Center.Z + LocalCenter.Z);
+			Piece.Size = Size;
+			OutPieces.Add(MoveTemp(Piece));
+		};
+		// Split along X, then the middle slab along Y, then the middle column along Z.
+		FVector Lo = BMin, Hi = BMax;
+		for (int32 A = 0; A < 3; ++A)
+		{
+			const double C0 = FMath::Max(CMin[A], Lo[A]);
+			const double C1 = FMath::Min(CMax[A], Hi[A]);
+			FVector PLo = Lo, PHi = Hi;
+			PHi[A] = C0;
+			AddPiece(PLo, PHi);
+			PLo = Lo;
+			PHi = Hi;
+			PLo[A] = C1;
+			AddPiece(PLo, PHi);
+			Lo[A] = C0;
+			Hi[A] = C1;
+		}
+		return true;
+	}
+
+	/** Cut every box of the given roles on a level with an oriented box. Returns how many boxes were cut. */
+	static int32 CutBoxes(FPlan& Plan, int32 Level, const TArray<FString>& Roles, const FVector& Center, const FVector& Size, double Yaw)
+	{
+		int32 NumCut = 0;
+		TArray<FBoxItem> Out;
+		Out.Reserve(Plan.Boxes.Num());
+		TArray<FBoxItem> Pieces;
+		for (const FBoxItem& B : Plan.Boxes)
+		{
+			if (B.Level == Level && Roles.Contains(B.Role) && SubtractBox(B, Center, Size, Yaw, Pieces))
+			{
+				++NumCut;
+				Out.Append(Pieces);
+			}
+			else
+			{
+				Out.Add(B);
+			}
+		}
+		Plan.Boxes = MoveTemp(Out);
+		return NumCut;
+	}
+
+	/** Is the point inside the box footprint (grown by Margin)? Also returns the point in the box's local frame. */
+	static bool FootprintContains(const FBoxItem& B, const FVector2D& P, double Margin, FVector2D& OutLocal)
+	{
+		OutLocal = Rot2(P - FVector2D(B.Center.X, B.Center.Y), -B.Yaw);
+		return FMath::Abs(OutLocal.X) <= B.Size.X / 2 + Margin && FMath::Abs(OutLocal.Y) <= B.Size.Y / 2 + Margin;
+	}
+
+	// ---------- Doors ----------
+
+	static void CutDoors(FPlan& Plan, const FPlanSettings& S)
+	{
+		const double DoorW = S.DoorWidthM * 100.0, DoorH = S.DoorHeightM * 100.0;
+		const TArray<FString> WallRoles = {TEXT("wall")};
+		for (FMarkerItem& M : Plan.Markers)
+		{
+			if (M.Kind != TEXT("door") && M.Kind != TEXT("locked"))
+			{
+				continue;
+			}
+			const FVector2D P(M.Location.X, M.Location.Y);
+			// The wall the icon sits on: the one whose footprint contains it, the thinnest if several do.
+			const FBoxItem* Host = nullptr;
+			FVector2D HostLocal;
+			for (const FBoxItem& B : Plan.Boxes)
+			{
+				FVector2D Local;
+				if (B.Level == M.Level && B.Role == TEXT("wall") && FootprintContains(B, P, 25.0, Local)
+					&& (!Host || FMath::Min(B.Size.X, B.Size.Y) < FMath::Min(Host->Size.X, Host->Size.Y)))
+				{
+					Host = &B;
+					HostLocal = Local;
+				}
+			}
+			if (!Host)
+			{
+				Plan.Warnings.Add(FString::Printf(TEXT("%s: the %s icon at (%.0f, %.0f) cm is not on a wall; no opening was cut."),
+					*LevelLabel(M.Level), *M.Kind, M.Location.X, M.Location.Y));
+				continue;
+			}
+			// The opening runs along the wall's long axis, through its whole thickness.
+			const bool bAlongX = Host->Size.X >= Host->Size.Y;
+			const double Thick = bAlongX ? Host->Size.Y : Host->Size.X;
+			const double WallBottom = Host->Center.Z - Host->Size.Z / 2;
+			const FVector2D LocalCenter = bAlongX ? FVector2D(HostLocal.X, 0) : FVector2D(0, HostLocal.Y);
+			const FVector2D WorldCenter = FVector2D(Host->Center.X, Host->Center.Y) + Rot2(LocalCenter, Host->Yaw);
+			const double Yaw = bAlongX ? Host->Yaw : Host->Yaw + 90.0;
+			const FVector CutCenter(WorldCenter.X, WorldCenter.Y, WallBottom + DoorH / 2 - 1.0);
+			const FVector CutSize(DoorW, Thick + 10.0, DoorH + 2.0); // a little extra so no skin is left at the floor
+			CutBoxes(Plan, M.Level, WallRoles, CutCenter, CutSize, Yaw);
+			M.bBuilt = true;
+			M.LabelHeightCm = DoorH + 30.0;
+		}
+	}
+
+	// ---------- Stairs ----------
+
+	struct FStairRun
+	{
+		int32 Lower = 0, Upper = 0;
+		FVector2D Center;
+	};
+
+	static void BuildStairs(FPlan& Plan, const FPlanSettings& S, const TMap<int32, double>& AllZ)
+	{
+		const double Width = S.StairWidthM * 100.0;
+		const double Tread = FMath::Max(S.StairTreadM, 0.05) * 100.0;
+		const double MaxRiser = FMath::Max(S.StairMaxRiserM, 0.02) * 100.0;
+		const double SlabT = S.FloorThicknessM * 100.0;
+		const TArray<FString> SlabRoles = {TEXT("floor"), TEXT("water"), TEXT("hazard")};
+		TArray<FStairRun> Built;
+
+		// Stairs-up first, so a matching stairs-down on the level above is recognized as the same stairs.
+		for (int32 Pass = 0; Pass < 2; ++Pass)
+		{
+			const TCHAR* Kind = Pass == 0 ? TEXT("stairs-up") : TEXT("stairs-down");
+			for (FMarkerItem& M : Plan.Markers)
+			{
+				if (M.Kind != Kind)
+				{
+					continue;
+				}
+				const double* OwnZ = AllZ.Find(M.Level);
+				if (!OwnZ)
+				{
+					continue;
+				}
+				// The nearest level above (stairs-up) or below (stairs-down).
+				int32 Other = 0;
+				double OtherZ = 0;
+				for (const auto& Pair : AllZ)
+				{
+					const bool bCandidate = Pass == 0 ? Pair.Value > *OwnZ + 1.0 : Pair.Value < *OwnZ - 1.0;
+					if (bCandidate && (Other == 0 || (Pass == 0 ? Pair.Value < OtherZ : Pair.Value > OtherZ)))
+					{
+						Other = Pair.Key;
+						OtherZ = Pair.Value;
+					}
+				}
+				if (Other == 0)
+				{
+					Plan.Warnings.Add(FString::Printf(TEXT("%s: %s icon has no level %s it; no stairs were built."),
+						*LevelLabel(M.Level), Kind, Pass == 0 ? TEXT("above") : TEXT("below")));
+					continue;
+				}
+				const int32 Lower = Pass == 0 ? M.Level : Other;
+				const int32 Upper = Pass == 0 ? Other : M.Level;
+				const double LowerZ = Pass == 0 ? *OwnZ : OtherZ;
+				const double UpperZ = Pass == 0 ? OtherZ : *OwnZ;
+				const FVector2D C(M.Location.X, M.Location.Y);
+
+				// Already built from the other level's icon?
+				const FStairRun* Same = Built.FindByPredicate([&](const FStairRun& R)
+				{
+					return R.Lower == Lower && R.Upper == Upper && FVector2D::Distance(R.Center, C) < FMath::Max(Width, 300.0);
+				});
+				if (Same)
+				{
+					M.bBuilt = true;
+					M.LabelHeightCm = 30.0;
+					continue;
+				}
+
+				// Icon at the middle of the run; yaw = the direction going up (icon facing for stairs-up, the reverse for stairs-down).
+				const double Yaw = Pass == 0 ? M.Yaw : M.Yaw + 180.0;
+				const double Rise = UpperZ - LowerZ;
+				const int32 N = FMath::Max(1, FMath::CeilToInt(Rise / MaxRiser - 1e-6));
+				const double Riser = Rise / N;
+				const double Run = N * Tread;
+				for (int32 I = 0; I < N; ++I)
+				{
+					const double Along = -Run / 2 + (I + 0.5) * Tread;
+					const double Height = (I + 1) * Riser;
+					const FVector2D W = C + Rot2(FVector2D(Along, 0), Yaw);
+					FBoxItem Step;
+					Step.Role = TEXT("stairs");
+					Step.Color = TEXT("#a7adb7");
+					Step.Level = Lower;
+					Step.Center = FVector(W.X, W.Y, LowerZ + Height / 2);
+					Step.Size = FVector(Tread, Width, Height);
+					Step.Yaw = Yaw;
+					Plan.Boxes.Add(MoveTemp(Step));
+				}
+				// Stairwell: open the upper level's floor over the whole run, so there is head room; the top step meets its edge.
+				if (Plan.LevelZ.Contains(Upper))
+				{
+					const FVector HoleCenter(C.X, C.Y, UpperZ - SlabT);
+					CutBoxes(Plan, Upper, SlabRoles, HoleCenter, FVector(Run, Width, 4 * SlabT), Yaw);
+				}
+				Built.Add({Lower, Upper, C});
+				M.bBuilt = true;
+				M.LabelHeightCm = 30.0;
+			}
+		}
+	}
+
+	// ---------- Volumes ----------
+
+	static void BuildVolumes(FPlan& Plan)
+	{
+		for (const FBoxItem& B : Plan.Boxes)
+		{
+			if (B.Role != TEXT("water") && B.Role != TEXT("hazard"))
+			{
+				continue;
+			}
+			const double* Z0 = Plan.LevelZ.Find(B.Level);
+			const double Bottom = B.Center.Z - B.Size.Z / 2;
+			const double Top = (Z0 ? *Z0 : B.Center.Z) + 100.0; // a character standing in it overlaps
+			FVolumeItem V;
+			V.Role = B.Role;
+			V.Level = B.Level;
+			V.Center = FVector(B.Center.X, B.Center.Y, (Bottom + Top) / 2);
+			V.Size = FVector(B.Size.X, B.Size.Y, Top - Bottom);
+			V.Yaw = B.Yaw;
+			Plan.Volumes.Add(MoveTemp(V));
+		}
+		for (const FMeshItem& M : Plan.Meshes)
+		{
+			if (M.Role != TEXT("water") && M.Role != TEXT("hazard"))
+			{
+				continue;
+			}
+			// Volumes are boxes: use the outline's bounds.
+			const FBox2D B(M.Points);
+			const double* Z0 = Plan.LevelZ.Find(M.Level);
+			const double Top = (Z0 ? *Z0 : M.ZBottom + M.Height) + 100.0;
+			FVolumeItem V;
+			V.Role = M.Role;
+			V.Level = M.Level;
+			V.Center = FVector(B.GetCenter().X, B.GetCenter().Y, (M.ZBottom + Top) / 2);
+			V.Size = FVector(B.GetSize().X, B.GetSize().Y, Top - M.ZBottom);
+			Plan.Volumes.Add(MoveTemp(V));
+		}
+	}
+
 	// ---------- Plan ----------
 
 	FBox FPlan::GetBounds() const
@@ -746,6 +1052,14 @@ namespace LevelLayout
 		for (const FMarkerItem& M : Markers)
 		{
 			B += M.Location;
+		}
+		for (const FMeshItem& M : Meshes)
+		{
+			for (const FVector2D& P : M.Points)
+			{
+				B += FVector(P.X, P.Y, M.ZBottom);
+				B += FVector(P.X, P.Y, M.ZBottom + M.Height);
+			}
 		}
 		return B;
 	}
@@ -779,6 +1093,16 @@ namespace LevelLayout
 			return GuessRole((*E)->Name);
 		};
 		TSet<FString> UnknownColors;
+
+		// Elevation (cm) of every level in the file, also the ones not imported: stairs need their neighbors.
+		TMap<int32, double> AllZ;
+		for (const FFloor& F : Project.Floors)
+		{
+			if (!AllZ.Contains(F.Level))
+			{
+				AllZ.Add(F.Level, (F.Elevation.IsSet() ? F.Elevation.GetValue() : DefaultElevation(F.Level, S.FloorHeightM)) * 100.0);
+			}
+		}
 
 		for (const FFloor& F : Project.Floors)
 		{
@@ -870,10 +1194,22 @@ namespace LevelLayout
 				double Zb, H;
 				Slab(Role, V.Color, Zb, H);
 				TArray<FFlatBox> Flats;
-				if (!VectorBoxes(V, W2Cm, S, Flats))
+				TArray<FVector2D> Polygon;
+				if (!VectorBoxes(V, W2Cm, S, Flats, Polygon))
 				{
 					++Skipped;
 					continue;
+				}
+				if (Polygon.Num() >= 3)
+				{
+					FMeshItem Mesh;
+					Mesh.Role = Role;
+					Mesh.Color = V.Color;
+					Mesh.Level = Lv;
+					Mesh.Points = MoveTemp(Polygon);
+					Mesh.ZBottom = Zb;
+					Mesh.Height = H;
+					Plan.Meshes.Add(MoveTemp(Mesh));
 				}
 				for (const FFlatBox& Fb : Flats)
 				{
@@ -890,7 +1226,7 @@ namespace LevelLayout
 			}
 			if (Skipped > 0)
 			{
-				Plan.Warnings.Add(FString::Printf(TEXT("%s: %d filled smooth shape(s) that are not rectangles were skipped (not supported yet)."),
+				Plan.Warnings.Add(FString::Printf(TEXT("%s: %d smooth shape(s) could not be built and were skipped."),
 					*LevelLabel(Lv), Skipped));
 			}
 
@@ -933,6 +1269,16 @@ namespace LevelLayout
 				Plan.Notes.Add(MoveTemp(Item));
 			}
 		}
+
+		if (S.bCutDoors)
+		{
+			CutDoors(Plan, S);
+		}
+		if (S.bBuildStairs)
+		{
+			BuildStairs(Plan, S, AllZ);
+		}
+		BuildVolumes(Plan);
 
 		if (UnknownColors.Num() > 0)
 		{

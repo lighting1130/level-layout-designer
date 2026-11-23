@@ -1,6 +1,6 @@
 {
  "format": "level-layout-designer",
- "version": 4,
+ "version": 5,
  "name": "原型示例",
  "exportedAt": "2026-11-23T03:00:00.000Z",
  "grid": {
@@ -75,7 +75,15 @@
     }
    ],
    "notes": [],
-   "icons": []
+   "icons": [
+    {
+     "kind": "stairs-down",
+     "x": 192,
+     "y": 160,
+     "size": 32,
+     "rot": 180
+    }
+   ]
   },
   {
    "level": 1,
@@ -1068,9 +1076,17 @@
     },
     {
      "kind": "stairs-up",
-     "x": 352,
-     "y": 224,
-     "size": 32
+     "x": 192,
+     "y": 160,
+     "size": 32,
+     "rot": 0
+    },
+    {
+     "kind": "door",
+     "x": 400,
+     "y": 144,
+     "size": 32,
+     "rot": 0
     }
    ]
   },

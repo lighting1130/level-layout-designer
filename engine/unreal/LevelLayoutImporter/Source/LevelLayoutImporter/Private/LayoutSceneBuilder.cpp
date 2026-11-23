@@ -6,6 +6,7 @@
 #include "LevelLayoutLog.h"
 
 #include "ActorFactories/ActorFactory.h"
+#include "Algo/Reverse.h"
 #include "AssetToolsModule.h"
 #include "Builders/CubeBuilder.h"
 #include "Camera/CameraActor.h"
@@ -30,6 +31,12 @@
 #include "Misc/Paths.h"
 #include "Misc/ScopedSlowTask.h"
 #include "NavMesh/NavMeshBoundsVolume.h"
+#include "AssetRegistry/AssetRegistryModule.h"
+#include "GameFramework/PainCausingVolume.h"
+#include "GameFramework/PhysicsVolume.h"
+#include "MeshDescription.h"
+#include "PhysicsEngine/BodySetup.h"
+#include "StaticMeshAttributes.h"
 #include "UObject/Package.h"
 #include "UObject/UnrealType.h"
 
@@ -225,7 +232,7 @@ namespace LevelLayout
 			Result.NumRemoved = RemoveActorsWithTag(World, Tag);
 		}
 
-		const int32 Total = Plan.Boxes.Num() + Plan.Markers.Num() + Plan.Notes.Num();
+		const int32 Total = Plan.Boxes.Num() + Plan.Meshes.Num() + Plan.Volumes.Num() + Plan.Markers.Num() + Plan.Notes.Num();
 		FScopedSlowTask Task((float)FMath::Max(Total, 1), FText::Format(LOCTEXT("Building", "Building blockout: {0}"), FText::FromString(Plan.Name)));
 		Task.MakeDialog(true);
 		for (int32 N = 0; N < Plan.Boxes.Num(); ++N)
@@ -239,6 +246,22 @@ namespace LevelLayout
 			if (SpawnBox(Plan.Boxes[N], N))
 			{
 				++Result.NumBoxes;
+			}
+		}
+		for (int32 N = 0; N < Plan.Meshes.Num() && !Task.ShouldCancel(); ++N)
+		{
+			Task.EnterProgressFrame(1);
+			if (SpawnMesh(Plan.Meshes[N], N))
+			{
+				++Result.NumMeshes;
+			}
+		}
+		for (int32 N = 0; Options.bAddVolumes && N < Plan.Volumes.Num() && !Task.ShouldCancel(); ++N)
+		{
+			Task.EnterProgressFrame(1);
+			if (SpawnVolume(Plan.Volumes[N], N))
+			{
+				++Result.NumVolumes;
 			}
 		}
 		for (int32 N = 0; N < Plan.Markers.Num() && !Task.ShouldCancel(); ++N)
@@ -258,7 +281,7 @@ namespace LevelLayout
 				++Result.NumNotes;
 			}
 		}
-		if (Options.bAddNavMeshBounds && Plan.Boxes.Num() > 0)
+		if (Options.bAddNavMeshBounds && Plan.Boxes.Num() + Plan.Meshes.Num() > 0)
 		{
 			SpawnNavBounds();
 		}
@@ -447,6 +470,11 @@ namespace LevelLayout
 	{
 		const ULevelLayoutImporterSettings* Settings = GetDefault<ULevelLayoutImporterSettings>();
 		const FRotator Rot(0, M.Yaw, 0);
+		if (M.bBuilt)
+		{
+			// Built as geometry (door opening, stairs): just the name over it.
+			return SpawnText(M.Label, M.Level, M.Location + FVector(0, 0, M.LabelHeightCm), FString::Printf(TEXT("Label_%s_%03d"), *M.Kind, Index), 40);
+		}
 		if (const TSoftClassPtr<AActor>* Mapped = Settings->IconActorClasses.Find(M.Kind))
 		{
 			if (UClass* Class = Mapped->LoadSynchronous())
@@ -511,21 +539,194 @@ namespace LevelLayout
 		// Room around the walls, and head room for a character above the highest floor.
 		B.Min -= FVector(200, 200, 100);
 		B.Max += FVector(200, 200, 300);
-		ANavMeshBoundsVolume* V = Spawn<ANavMeshBoundsVolume>(B.GetCenter(), FRotator::ZeroRotator);
+		ANavMeshBoundsVolume* V = SpawnBrushVolume<ANavMeshBoundsVolume>(B.GetCenter(), B.GetSize(), 0);
+		if (!V)
+		{
+			return nullptr;
+		}
+		Place(V, Plan.Boxes.Num() > 0 ? Plan.Boxes[0].Level : 1, TEXT("NavMeshBounds"));
+		V->SetFolderPath(FName(*FString::Printf(TEXT("LevelLayout/%s"), *Name)));
+		return V;
+	}
+
+	template <typename T>
+	T* FSceneBuilder::SpawnBrushVolume(const FVector& Center, const FVector& Size, double Yaw)
+	{
+		T* V = Spawn<T>(Center, FRotator(0, Yaw, 0));
 		if (!V)
 		{
 			return nullptr;
 		}
 		UCubeBuilder* Builder = NewObject<UCubeBuilder>();
-		const FVector Size = B.GetSize();
 		Builder->X = (float)Size.X;
 		Builder->Y = (float)Size.Y;
 		Builder->Z = (float)Size.Z;
 		UActorFactory::CreateBrushForVolumeActor(V, Builder);
 		V->PostEditChange();
-		Place(V, Plan.Boxes.Num() > 0 ? Plan.Boxes[0].Level : 1, TEXT("NavMeshBounds"));
-		V->SetFolderPath(FName(*FString::Printf(TEXT("LevelLayout/%s"), *Name)));
 		return V;
+	}
+
+	AActor* FSceneBuilder::SpawnVolume(const FVolumeItem& Vol, int32 Index)
+	{
+		if (Vol.Role == TEXT("water"))
+		{
+			APhysicsVolume* V = SpawnBrushVolume<APhysicsVolume>(Vol.Center, Vol.Size, Vol.Yaw);
+			if (V)
+			{
+				V->bWaterVolume = true;
+				V->FluidFriction = 0.3f;
+			}
+			return Place(V, Vol.Level, FString::Printf(TEXT("WaterVolume_%03d"), Index));
+		}
+		APainCausingVolume* V = SpawnBrushVolume<APainCausingVolume>(Vol.Center, Vol.Size, Vol.Yaw);
+		if (V)
+		{
+			V->bPainCausing = true;
+			V->DamagePerSec = 20.0f;
+		}
+		return Place(V, Vol.Level, FString::Printf(TEXT("HazardVolume_%03d"), Index));
+	}
+
+	AActor* FSceneBuilder::SpawnMesh(const FMeshItem& M, int32 Index)
+	{
+		FVector2D C(0, 0);
+		for (const FVector2D& P : M.Points)
+		{
+			C += P;
+		}
+		C /= M.Points.Num();
+		const FVector Pivot(C.X, C.Y, M.ZBottom);
+		UStaticMesh* Mesh = BuildPrismMesh(M, Pivot);
+		if (!Mesh)
+		{
+			Result.Warnings.Add(FString::Printf(TEXT("%s: could not build the mesh for a filled %s shape."), *LevelLabel(M.Level), *M.Role));
+			return nullptr;
+		}
+		AStaticMeshActor* A = Spawn<AStaticMeshActor>(Pivot, FRotator::ZeroRotator);
+		if (!A)
+		{
+			return nullptr;
+		}
+		UStaticMeshComponent* Comp = A->GetStaticMeshComponent();
+		Comp->SetStaticMesh(Mesh);
+		if (M.Role == TEXT("water") || M.Role == TEXT("hazard"))
+		{
+			Comp->SetCollisionProfileName(TEXT("OverlapAllDynamic"));
+		}
+		return Place(A, M.Level, FString::Printf(TEXT("%s_shape_%03d"), *M.Role, Index));
+	}
+
+	UStaticMesh* FSceneBuilder::BuildPrismMesh(const FMeshItem& M, const FVector& Pivot)
+	{
+		// One asset per distinct shape (outline relative to its pivot, height, color), reused by later imports.
+		TArray<FVector3f> Ring; // bottom ring relative to the pivot
+		for (const FVector2D& P : M.Points)
+		{
+			Ring.Add(FVector3f((float)(P.X - Pivot.X), (float)(P.Y - Pivot.Y), 0.f));
+		}
+		const float H = (float)M.Height;
+		uint32 Hash = FCrc::MemCrc32(Ring.GetData(), Ring.Num() * sizeof(FVector3f));
+		Hash = FCrc::MemCrc32(&H, sizeof(H), Hash);
+		Hash = FCrc::StrCrc32(*M.Color, Hash);
+		const FString AssetName = FString::Printf(TEXT("SM_%s_%08x"), *M.Role, Hash);
+		const FString PackageName = AssetFolder() / TEXT("Meshes") / AssetName;
+		if (UStaticMesh* Existing = LoadObject<UStaticMesh>(nullptr, *(PackageName + TEXT(".") + AssetName), nullptr, LOAD_NoWarn | LOAD_Quiet))
+		{
+			return Existing;
+		}
+
+		// Make the outline counter-clockwise in X / Y (signed area > 0) so every face can be wound the same way.
+		double Area2 = 0;
+		for (int32 I = 0; I < Ring.Num(); ++I)
+		{
+			const FVector3f& A = Ring[I];
+			const FVector3f& B = Ring[(I + 1) % Ring.Num()];
+			Area2 += (double)A.X * B.Y - (double)B.X * A.Y;
+		}
+		if (Area2 < 0)
+		{
+			Algo::Reverse(Ring);
+		}
+
+		FMeshDescription Desc;
+		FStaticMeshAttributes Attr(Desc);
+		Attr.Register();
+		TVertexAttributesRef<FVector3f> Positions = Attr.GetVertexPositions();
+		TVertexInstanceAttributesRef<FVector3f> Normals = Attr.GetVertexInstanceNormals();
+		TVertexInstanceAttributesRef<FVector2f> UVs = Attr.GetVertexInstanceUVs();
+		UVs.SetNumChannels(1);
+		const FPolygonGroupID Group = Desc.CreatePolygonGroup();
+		Attr.GetPolygonGroupMaterialSlotNames()[Group] = FName(TEXT("Color"));
+
+		// Each face gets its own vertices (flat shading, simple UVs: 1 UV = 1 m, projected along the face normal).
+		auto AddTriangle = [&](const FVector3f& P0, const FVector3f& P1, const FVector3f& P2, const FVector3f& WantNormal)
+		{
+			// UE treats (P2 - P0) x (P1 - P0) as the front normal; order the corners so it points outward.
+			FVector3f Q0 = P0, Q1 = P1, Q2 = P2;
+			if (FVector3f::DotProduct(FVector3f::CrossProduct(Q2 - Q0, Q1 - Q0), WantNormal) < 0)
+			{
+				Swap(Q1, Q2);
+			}
+			TArray<FVertexInstanceID, TFixedAllocator<3>> Corners;
+			for (const FVector3f& Q : {Q0, Q1, Q2})
+			{
+				const FVertexID V = Desc.CreateVertex();
+				Positions[V] = Q;
+				const FVertexInstanceID I = Desc.CreateVertexInstance(V);
+				Normals[I] = WantNormal;
+				const FVector2f UV = FMath::Abs(WantNormal.Z) > 0.5f ? FVector2f(Q.X, Q.Y) : FVector2f(Q.X + Q.Y, -Q.Z);
+				UVs.Set(I, 0, UV / 100.f);
+				Corners.Add(I);
+			}
+			Desc.CreateTriangle(Group, Corners);
+		};
+		const FVector3f Up(0, 0, H);
+		for (int32 I = 1; I + 1 < Ring.Num(); ++I) // convex: a fan covers the top and bottom
+		{
+			AddTriangle(Ring[0] + Up, Ring[I] + Up, Ring[I + 1] + Up, FVector3f(0, 0, 1));
+			AddTriangle(Ring[0], Ring[I], Ring[I + 1], FVector3f(0, 0, -1));
+		}
+		for (int32 I = 0; I < Ring.Num(); ++I)
+		{
+			const FVector3f& A = Ring[I];
+			const FVector3f& B = Ring[(I + 1) % Ring.Num()];
+			const FVector3f Edge = B - A;
+			const FVector3f Out = FVector3f(Edge.Y, -Edge.X, 0).GetSafeNormal(); // outward for a counter-clockwise ring
+			AddTriangle(A, B, B + Up, Out);
+			AddTriangle(A, B + Up, A + Up, Out);
+		}
+
+		UPackage* Package = CreatePackage(*PackageName);
+		UStaticMesh* Mesh = NewObject<UStaticMesh>(Package, FName(*AssetName), RF_Public | RF_Standalone | RF_Transactional);
+		Mesh->GetStaticMaterials().Add(FStaticMaterial(MaterialFor(M.Color), FName(TEXT("Color")), FName(TEXT("Color"))));
+		UStaticMesh::FBuildMeshDescriptionsParams Params;
+		Params.bBuildSimpleCollision = false;
+		Params.bCommitMeshDescription = true;
+		Params.bMarkPackageDirty = true;
+		Params.bUseHashAsGuid = true;
+		Params.bFastBuild = false;
+		Mesh->BuildFromMeshDescriptions({&Desc}, Params);
+
+		// Simple collision: the prism itself (it is convex).
+		Mesh->CreateBodySetup();
+		if (UBodySetup* Body = Mesh->GetBodySetup())
+		{
+			Body->RemoveSimpleCollision();
+			FKConvexElem Convex;
+			for (const FVector3f& P : Ring)
+			{
+				Convex.VertexData.Add(FVector(P));
+				Convex.VertexData.Add(FVector(P + Up));
+			}
+			Convex.UpdateElemBox();
+			Body->AggGeom.ConvexElems.Add(Convex);
+			Body->InvalidatePhysicsData();
+			Body->CreatePhysicsMeshes();
+		}
+		Mesh->MarkPackageDirty();
+		FAssetRegistryModule::AssetCreated(Mesh);
+		PackagesToSave.AddUnique(Package);
+		return Mesh;
 	}
 
 	// ---------- Assets ----------

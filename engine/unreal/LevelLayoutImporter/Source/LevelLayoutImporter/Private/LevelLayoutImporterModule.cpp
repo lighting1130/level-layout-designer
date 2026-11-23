@@ -34,8 +34,8 @@ namespace
 			FMessageDialog::Open(EAppMsgType::Ok, FText::Format(LOCTEXT("ImportFailed", "Level Layout import failed:\n\n{0}"), FText::FromString(Result.Error)));
 			return;
 		}
-		FString Text = FString::Printf(TEXT("Imported %s: %d boxes, %d icons, %d notes (%s)."),
-			*Result.ProjectName, Result.NumBoxes, Result.NumMarkers, Result.NumNotes, *Result.BackendUsed);
+		FString Text = FString::Printf(TEXT("Imported %s: %d boxes, %d meshes, %d volumes, %d icons, %d notes (%s)."),
+			*Result.ProjectName, Result.NumBoxes, Result.NumMeshes, Result.NumVolumes, Result.NumMarkers, Result.NumNotes, *Result.BackendUsed);
 		if (Result.NumRemoved > 0)
 		{
 			Text += FString::Printf(TEXT("\nReplaced %d actors from the previous import."), Result.NumRemoved);
@@ -83,14 +83,14 @@ namespace
 	}
 
 	/**
-	 * LevelLayout.Import <file.json> [backend=auto|blockout|cube] [levels=1,-1] [wall=4] [floor=5] [keep] [nonav]
+	 * LevelLayout.Import <file.json> [backend=auto|blockout|cube] [levels=1,-1] [wall=4] [floor=5] [keep] [nonav] [nodoors] [nostairs] [novolumes]
 	 * For scripts and -ExecCmds; the result goes to the log (LogLevelLayout).
 	 */
 	void ImportCommand(const TArray<FString>& Args)
 	{
 		if (Args.Num() == 0)
 		{
-			UE_LOG(LogLevelLayout, Display, TEXT("Usage: LevelLayout.Import <file.json> [backend=auto|blockout|cube] [levels=1,-1] [wall=4] [floor=5] [keep] [nonav]"));
+			UE_LOG(LogLevelLayout, Display, TEXT("Usage: LevelLayout.Import <file.json> [backend=auto|blockout|cube] [levels=1,-1] [wall=4] [floor=5] [keep] [nonav] [nodoors] [nostairs] [novolumes]"));
 			return;
 		}
 		FLevelLayoutImportOptions Options = ULevelLayoutImportLibrary::GetDefaultImportOptions(Args[0].TrimQuotes());
@@ -133,19 +133,31 @@ namespace
 			{
 				Options.bAddNavMeshBounds = false;
 			}
+			else if (Key == TEXT("nodoors"))
+			{
+				Options.bCutDoors = false;
+			}
+			else if (Key == TEXT("nostairs"))
+			{
+				Options.bBuildStairs = false;
+			}
+			else if (Key == TEXT("novolumes"))
+			{
+				Options.bAddVolumes = false;
+			}
 			else
 			{
 				UE_LOG(LogLevelLayout, Warning, TEXT("Unknown argument: %s"), *Args[N]);
 			}
 		}
 		const FLevelLayoutImportResult Result = ULevelLayoutImportLibrary::ImportLevelLayout(Options);
-		UE_LOG(LogLevelLayout, Display, TEXT("LevelLayout.Import result: success=%d backend=%s boxes=%d icons=%d notes=%d removed=%d warnings=%d"),
-			Result.bSuccess ? 1 : 0, *Result.BackendUsed, Result.NumBoxes, Result.NumMarkers, Result.NumNotes, Result.NumRemoved, Result.Warnings.Num());
+		UE_LOG(LogLevelLayout, Display, TEXT("LevelLayout.Import result: success=%d backend=%s boxes=%d meshes=%d volumes=%d icons=%d notes=%d removed=%d warnings=%d"),
+			Result.bSuccess ? 1 : 0, *Result.BackendUsed, Result.NumBoxes, Result.NumMeshes, Result.NumVolumes, Result.NumMarkers, Result.NumNotes, Result.NumRemoved, Result.Warnings.Num());
 	}
 
 	FAutoConsoleCommand GImportCommand(
 		TEXT("LevelLayout.Import"),
-		TEXT("Import a Level Layout Designer project: LevelLayout.Import <file.json> [backend=auto|blockout|cube] [levels=1,-1] [wall=4] [floor=5] [keep] [nonav]"),
+		TEXT("Import a Level Layout Designer project: LevelLayout.Import <file.json> [backend=auto|blockout|cube] [levels=1,-1] [wall=4] [floor=5] [keep] [nonav] [nodoors] [nostairs] [novolumes]"),
 		FConsoleCommandWithArgsDelegate::CreateStatic(&ImportCommand));
 
 	FAutoConsoleCommand GRemoveCommand(

@@ -68,10 +68,17 @@ FLevelLayoutImportResult ULevelLayoutImportLibrary::ImportLevelLayout(const FLev
 	Settings.FloorThicknessM = Options.FloorThickness;
 	Settings.LiquidDepthM = Options.LiquidDepth;
 	Settings.Levels = Options.Levels;
+	Settings.bCutDoors = Options.bCutDoors;
+	Settings.DoorWidthM = Options.DoorWidth;
+	Settings.DoorHeightM = Options.DoorHeight;
+	Settings.bBuildStairs = Options.bBuildStairs;
+	Settings.StairWidthM = Options.StairWidth;
+	Settings.StairMaxRiserM = Options.StairMaxStepHeight;
+	Settings.StairTreadM = Options.StairStepDepth;
 	const LevelLayout::FPlan Plan = LevelLayout::BuildPlan(Project, Settings);
 	Result.ProjectName = Plan.Name;
 	Result.Warnings = Plan.Warnings;
-	if (Plan.Boxes.Num() + Plan.Markers.Num() + Plan.Notes.Num() == 0)
+	if (Plan.Boxes.Num() + Plan.Meshes.Num() + Plan.Markers.Num() + Plan.Notes.Num() == 0)
 	{
 		return Fail(Options.Levels.Num() > 0
 			? TEXT("Nothing to import: the selected levels are empty or not in the file.")
@@ -89,8 +96,8 @@ FLevelLayoutImportResult ULevelLayoutImportLibrary::ImportLevelLayout(const FLev
 	}
 	Result.bSuccess = true;
 
-	UE_LOG(LogLevelLayout, Log, TEXT("Imported %s (1 cell = %g m, backend %s): %d boxes, %d icons, %d notes; removed %d actors from the previous import."),
-		*Plan.Name, Plan.MetersPerCell, *Result.BackendUsed, Result.NumBoxes, Result.NumMarkers, Result.NumNotes, Result.NumRemoved);
+	UE_LOG(LogLevelLayout, Log, TEXT("Imported %s (1 cell = %g m, backend %s): %d boxes, %d meshes, %d volumes, %d icons, %d notes; removed %d actors from the previous import."),
+		*Plan.Name, Plan.MetersPerCell, *Result.BackendUsed, Result.NumBoxes, Result.NumMeshes, Result.NumVolumes, Result.NumMarkers, Result.NumNotes, Result.NumRemoved);
 	for (const FString& W : Result.Warnings)
 	{
 		UE_LOG(LogLevelLayout, Warning, TEXT("%s"), *W);

@@ -54,6 +54,11 @@ namespace LevelLayout
 		AActor* SpawnMarker(const FMarkerItem& Marker, int32 Index);
 		AActor* SpawnText(const FString& Text, int32 Level, const FVector& Location, const FString& Label, double WorldSize);
 		AActor* SpawnNavBounds();
+		AActor* SpawnMesh(const FMeshItem& Mesh, int32 Index);
+		AActor* SpawnVolume(const FVolumeItem& Volume, int32 Index);
+		UStaticMesh* BuildPrismMesh(const FMeshItem& Mesh, const FVector& Pivot);
+		template <typename T>
+		T* SpawnBrushVolume(const FVector& Center, const FVector& Size, double Yaw);
 
 		template <typename T>
 		T* Spawn(const FVector& Location, const FRotator& Rotation);

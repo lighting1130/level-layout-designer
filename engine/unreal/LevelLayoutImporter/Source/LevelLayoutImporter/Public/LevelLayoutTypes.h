@@ -45,6 +45,36 @@ struct LEVELLAYOUTIMPORTER_API FLevelLayoutImportOptions
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Level Layout|Sizes", meta = (ClampMin = "0", Units = "m"))
 	float LiquidDepth = 0.1f;
 
+	/** Door and locked-door icons cut an opening into the wall they sit on. */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Level Layout|Doors and Stairs")
+	bool bCutDoors = true;
+
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Level Layout|Doors and Stairs", meta = (ClampMin = "0.1", Units = "m", EditCondition = "bCutDoors"))
+	float DoorWidth = 2.0f;
+
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Level Layout|Doors and Stairs", meta = (ClampMin = "0.1", Units = "m", EditCondition = "bCutDoors"))
+	float DoorHeight = 3.0f;
+
+	/** Stairs-up / stairs-down icons build straight stairs to the nearest level above / below, centered on the icon and
+	 *  facing its direction, and open the upper floor over them. */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Level Layout|Doors and Stairs")
+	bool bBuildStairs = true;
+
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Level Layout|Doors and Stairs", meta = (ClampMin = "0.3", Units = "m", EditCondition = "bBuildStairs"))
+	float StairWidth = 2.0f;
+
+	/** Highest step; the number of steps follows from the height between the levels (m). */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Level Layout|Doors and Stairs", meta = (ClampMin = "0.05", ClampMax = "0.45", Units = "m", EditCondition = "bBuildStairs"))
+	float StairMaxStepHeight = 0.2f;
+
+	/** Depth of each step (m). */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Level Layout|Doors and Stairs", meta = (ClampMin = "0.1", Units = "m", EditCondition = "bBuildStairs"))
+	float StairStepDepth = 0.3f;
+
+	/** Add a water PhysicsVolume over water and a PainCausingVolume over hazards. */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Level Layout")
+	bool bAddVolumes = true;
+
 	/** Only import these levels (1 = first floor, -1 = first basement). Empty = all levels. */
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Level Layout")
 	TArray<int32> Levels;
@@ -96,6 +126,14 @@ struct LEVELLAYOUTIMPORTER_API FLevelLayoutImportResult
 
 	UPROPERTY(BlueprintReadOnly, Category = "Level Layout")
 	int32 NumBoxes = 0;
+
+	/** Filled non-rectangular shapes, built as Static Mesh assets. */
+	UPROPERTY(BlueprintReadOnly, Category = "Level Layout")
+	int32 NumMeshes = 0;
+
+	/** Water and hazard volumes. */
+	UPROPERTY(BlueprintReadOnly, Category = "Level Layout")
+	int32 NumVolumes = 0;
 
 	UPROPERTY(BlueprintReadOnly, Category = "Level Layout")
 	int32 NumMarkers = 0;
