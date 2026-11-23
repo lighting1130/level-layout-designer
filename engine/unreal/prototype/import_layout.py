@@ -14,6 +14,10 @@
   --backend auto|blockout|cube
                   墙和地面用什么摆：装了 Blockout Tools 插件时默认用它的 Blockout_Box，
                   否则用引擎 Cube
+  --font /Game/路径/字体
+                  文字用这个字体资产（必须是 Offline 缓存的 UFont）。不写时如果备注或图标名字里
+                  有非 ASCII 字符，会用 Windows 自带的中文字体（微软雅黑 / 黑体 / 等线 / 宋体）
+                  生成一个只含用到的字的 Offline 字体
 
 生成的东西：
   - 墙 / 地面 / 水域 / 伤害区：每个合并后的矩形一个 Actor，可以单独移动。
@@ -28,6 +32,7 @@ import math
 import os
 import re
 import sys
+import zlib
 
 import unreal
 
@@ -49,7 +54,7 @@ BLOCKOUT_GRID_SIZE_CM = 100.0  # 白盒材质网格 = 网页里 1 格
 
 
 def parse_args(argv):
-    opts = {"path": None, "wall": None, "floor": None, "floors": None, "keep": False, "backend": "auto"}
+    opts = {"path": None, "wall": None, "floor": None, "floors": None, "keep": False, "backend": "auto", "font": None}
     it = iter(argv)
     for a in it:
         if a == "--wall":
@@ -62,6 +67,8 @@ def parse_args(argv):
             opts["keep"] = True
         elif a == "--backend":
             opts["backend"] = next(it)
+        elif a == "--font":
+            opts["font"] = next(it)
         elif not a.startswith("--"):
             opts["path"] = a
     return opts
@@ -95,7 +102,7 @@ def hex_to_linear(hexcolor):
 
 
 class Importer:
-    def __init__(self, plan, keep, backend="auto"):
+    def __init__(self, plan, keep, backend="auto", font=None):
         self.plan = plan
         self.keep = keep
         self.name = safe_name(plan.name)
@@ -104,6 +111,7 @@ class Importer:
         self.cube = unreal.load_asset(CUBE)
         self.cylinder = unreal.load_asset(CYLINDER)
         self.materials = {}
+        self.font = text_font(plan, self.name, font)
         # 最后再加载 Blockout：校准要用到上面的 self.actors
         self.blockout = None if backend == "cube" else BlockoutBackend.load(self)
         if backend == "blockout" and self.blockout is None:
@@ -186,9 +194,11 @@ class Importer:
         return a
 
     def spawn_text(self, text, floor, loc, label, size=60):
-        # 文字平放朝上，方便在顶视图里读（方向需要在 UE 里确认，见 README“待验证”）
+        # 文字平放朝上，从顶视图沿 +X 正着读
         a = self.actors.spawn_actor_from_class(unreal.TextRenderActor, unreal.Vector(*loc), unreal.Rotator(roll=0.0, pitch=90.0, yaw=90.0))  # 已在 UE 5.8 确认：顶视图正着读
         comp = a.get_editor_property("text_render")
+        if self.font is not None:
+            comp.set_font(self.font)  # TextRender 会按字体页自动替换文字材质里的 Font 参数
         comp.set_text(text)
         comp.set_world_size(size)
         comp.set_horizontal_alignment(unreal.HorizTextAligment.EHTA_CENTER)
@@ -212,6 +222,95 @@ class Importer:
                 task.enter_progress_frame(1)
                 self.spawn_text(note.text, note.floor, note.location, f"Note_{n:03d}")
         return removed
+
+
+# ---- 中文字体 ----
+# TextRender 只支持 Offline 缓存的 UFont，引擎自带的字体没有中文字形。这里用本机 Windows 字体现场生成一个，
+# 只含本次用到的字，字体文件本身不进仓库。
+CJK_FONTS = [  # (TrueTypeFontFactory 用的字体名, Windows\Fonts 下的文件)
+    ("Microsoft YaHei", "msyh.ttc"),
+    ("SimHei", "simhei.ttf"),
+    ("DengXian", "Deng.ttf"),
+    ("SimSun", "simsun.ttc"),
+]
+FONT_HEIGHT = 64
+ASCII = "".join(chr(c) for c in range(32, 127))
+
+
+def _font_is_offline(font):
+    try:
+        return font.get_editor_property("font_cache_type") == unreal.FontCacheType.OFFLINE
+    except Exception:
+        return True  # 读不到就当可以用
+
+
+def text_font(plan, project_name, font_path=None):
+    """返回 TextRender 用的 UFont；None 表示用引擎默认字体"""
+    if font_path:
+        font = unreal.load_asset(font_path)
+        if not isinstance(font, unreal.Font):
+            unreal.log_warning(f"[LevelLayout] --font {font_path} 不是字体资产，文字用默认字体（中文会显示成方框）。")
+            return None
+        if not _font_is_offline(font):
+            unreal.log_warning(f"[LevelLayout] --font {font_path} 不是 Offline 缓存的字体，TextRender 不支持，文字用默认字体。")
+            return None
+        return font
+    texts = [n.text for n in plan.notes] + [m.label for m in plan.markers]
+    extra = sorted({ch for t in texts for ch in t if ord(ch) > 126 and not ch.isspace()})
+    if not extra:
+        return None  # 全是 ASCII，默认字体就够
+    try:
+        return _generate_cjk_font(project_name, ASCII + "".join(extra))
+    except Exception as e:
+        unreal.log_warning(f"[LevelLayout] 生成中文字体失败（{e}），文字用默认字体（中文会显示成方框）。可以用 --font 指定一个 Offline 字体。")
+        return None
+
+
+def _generate_cjk_font(project_name, chars):
+    folder = f"{ASSET_ROOT}/{project_name}"
+    path = f"{folder}/Font_CJK"
+    lib = unreal.EditorAssetLibrary
+    if lib.does_asset_exist(path):
+        old = unreal.load_asset(path)
+        if isinstance(old, unreal.Font) and lib.get_metadata_tag(old, "LevelLayoutChars") == chars:
+            return old  # 同样的字已经生成过
+        if not lib.delete_asset(path):
+            # 还被别的关卡引用着删不掉：换个名字另存
+            path = f"{folder}/Font_CJK_{zlib.crc32(chars.encode('utf-8')):08x}"
+            if lib.does_asset_exist(path):
+                return unreal.load_asset(path)
+    fonts_dir = os.path.join(os.environ.get("WINDIR", "C:/Windows"), "Fonts")
+    name = next((n for n, f in CJK_FONTS if os.path.exists(os.path.join(fonts_dir, f))), None)
+    if name is None:
+        raise RuntimeError("系统里没找到微软雅黑 / 黑体 / 等线 / 宋体")
+    factory = unreal.TrueTypeFontFactory()
+    options = factory.get_editor_property("import_options")
+    data = options.get_editor_property("data")
+    data.set_editor_property("font_name", name)
+    data.set_editor_property("height", float(FONT_HEIGHT))
+    data.set_editor_property("chars", chars)
+    data.set_editor_property("enable_antialiasing", True)
+    # 引擎的 TextRender 默认材质是给距离场字体用的（读贴图的颜色通道），普通 alpha 字体会显示成实心方块，
+    # 所以生成距离场字体：先按 字号×8 渲染，再算距离场缩小
+    data.set_editor_property("use_distance_field_alpha", True)
+    data.set_editor_property("distance_field_scale_factor", 8)
+    data.set_editor_property("texture_page_width", 1024)  # 尽量一页放下
+    data.set_editor_property("texture_page_max_height", 1024)
+    options.set_editor_property("data", data)
+    factory.set_editor_property("import_options", options)
+    asset_name = path.rsplit("/", 1)[1]
+    font = unreal.AssetToolsHelpers.get_asset_tools().create_asset(asset_name, folder, unreal.Font, factory)
+    if font is None:
+        raise RuntimeError("TrueTypeFontFactory 没有生成字体")
+    pages = [t for t in unreal.ObjectIterator(unreal.Texture2D) if t.get_outer() == font]
+    for t in pages:
+        t.set_editor_property("lod_group", unreal.TextureGroup.TEXTUREGROUP_UI)  # 不要 mip，顺便触发贴图重新构建
+    if not pages:
+        raise RuntimeError("生成的字体没有贴图页")
+    lib.set_metadata_tag(font, "LevelLayoutChars", chars)
+    lib.save_loaded_asset(font)
+    unreal.log(f"[LevelLayout] 用系统字体 {name} 生成了中文字体 {font.get_path_name()}（{len(chars)} 个字，字号 {FONT_HEIGHT}）")
+    return font
 
 
 class BlockoutBackend:
@@ -313,7 +412,7 @@ def main(argv):
         return
     with unreal.ScopedEditorTransaction(f"导入关卡 Layout：{plan.name}"):
         try:
-            importer = Importer(plan, opts["keep"], opts["backend"])
+            importer = Importer(plan, opts["keep"], opts["backend"], opts["font"])
         except RuntimeError as e:
             unreal.log_error(f"[LevelLayout] {e}")
             return
