@@ -763,6 +763,8 @@ function drawHover() {
       : imgDrag?.kind === "resize" ? resizeCursor(imgDrag.hx, imgDrag.hy, imgDrag.img.rot)
       : hover && imageHandleAt(hover.x, hover.y) ? resizeCursor(imageHandleAt(hover.x, hover.y)!.hx, imageHandleAt(hover.x, hover.y)!.hy, imgSel?.rot)
       : scaleDrag ? resizeCursor(scaleDrag.hx, scaleDrag.hy)
+      : iconDrag ? resizeCursor(iconDrag.hx, iconDrag.hy)
+      : hover && iconHandleAt(hover.x, hover.y) ? resizeCursor(iconHandleAt(hover.x, hover.y)!.hx, iconHandleAt(hover.x, hover.y)!.hy)
       : hover && selHandleAt(hover.x, hover.y) ? resizeCursor(selHandleAt(hover.x, hover.y)!.hx, selHandleAt(hover.x, hover.y)!.hy)
       : hover && ((selection && inSelection(cam.screenToWorld(hover.x, hover.y))) || noteAt(hover.x, hover.y) || iconUnder(cam.screenToWorld(hover.x, hover.y)) || imageAt(hover.x, hover.y)) ? "move" : "default";
     return;
@@ -804,6 +806,7 @@ function frame() {
     ctx.globalAlpha = 1;
     // 拖动选区时，原位置的内容先隐藏，只在新位置预览
     const dragging = !!(moveDrag || scaleDrag);
+    const hiddenByIconDrag = iconDrag && selection ? new Set(selection.icons) : undefined;
     const hidden = dragging && selection ? new Set(selection.cells.map(cellKey)) : undefined;
     const hiddenVec = dragging && selection ? new Set(selection.vectors) : undefined;
     layer.draw(ctx, cam, width, height, hidden);
@@ -815,7 +818,8 @@ function frame() {
     const getImg = (id: string) => imageStore.get(id);
     for (const f of others) drawIcons(ctx, cam, f.icons, getImg, floorAlpha(f.level));
     const hiddenIcons = dragging && selection ? new Set(selection.icons) : undefined;
-    drawIcons(ctx, cam, hiddenIcons ? icons.filter((ic) => !hiddenIcons.has(ic)) : icons, getImg, 1, selection ? new Set(selection.icons) : undefined);
+    const hideIc = hiddenIcons ?? hiddenByIconDrag;
+    drawIcons(ctx, cam, hideIc ? icons.filter((ic) => !hideIc.has(ic)) : icons, getImg, 1, selection ? new Set(selection.icons) : undefined);
     for (const f of others) drawNotes(ctx, cam, f.notes, floorAlpha(f.level));
     const hiddenNotes = dragging && selection ? new Set(selection.notes) : undefined;
     let shown = hiddenNotes ? notes.filter((n) => !hiddenNotes.has(n)) : notes;
@@ -841,7 +845,7 @@ function frame() {
     hudBrush.textContent = t("笔刷: {size}", { size: `${formatCellSize(bk)} · ${formatLength(worldToMeters(levelStep(bk)))}` });
     hudFloor.textContent = floorName(currentLevel);
     syncImagePanel();
-    selectPanel.hidden = !(selection && tool === "select" && !moveDrag && !scaleDrag);
+    selectPanel.hidden = !(selection && tool === "select" && !moveDrag && !scaleDrag && !iconDrag);
     if (!selectPanel.hidden) syncSelIconRow();
     if (tool === "icon") iconSizeM.textContent = `= ${formatLength(worldToMeters(iconSize * levelStep(bk)))}`;
   }
@@ -958,7 +962,7 @@ function drawRulers() {
 }
 
 // ---------------- 指针：涂色 / 平移 / 双指缩放 ----------------
-type Mode = "none" | "paint" | "draw" | "pan" | "pinch" | "marquee" | "move" | "scale" | "noteDrag" | "imgDrag";
+type Mode = "none" | "paint" | "draw" | "pan" | "pinch" | "marquee" | "move" | "scale" | "iconScale" | "noteDrag" | "imgDrag";
 let mode: Mode = "none";
 const pointers = new Map<number, { x: number; y: number }>();
 let pinchDist = 0;
@@ -1341,7 +1345,7 @@ function endNoteDrag() {
 }
 
 function clearSelection() {
-  if (selection || marquee) { selection = null; marquee = null; moveDrag = null; scaleDrag = null; requestRender(); }
+  if (selection || marquee) { selection = null; marquee = null; moveDrag = null; scaleDrag = null; iconDrag = null; requestRender(); }
   if (imgSel) { imgSel = null; requestRender(); }
 }
 
@@ -1519,6 +1523,14 @@ const imagePanel = $("image-options");
 const selectPanel = $("select-options");
 const selIconRow = $("sel-icon-row");
 const selIconSize = $("sel-icon-size") as HTMLInputElement;
+/** 缩放选区时图标是否跟着变大小（记住选择） */
+const selIconScale = $("sel-icon-scale") as HTMLInputElement;
+const ICON_SCALE_KEY = "level-layout-designer.seliconscale.v1";
+try { selIconScale.checked = localStorage.getItem(ICON_SCALE_KEY) !== "0"; } catch { /* 忽略 */ }
+selIconScale.addEventListener("change", () => {
+  try { localStorage.setItem(ICON_SCALE_KEY, selIconScale.checked ? "1" : "0"); } catch { /* 忽略 */ }
+  selIconScale.blur();
+});
 /** 点中的图标（最上面的一个） */
 function iconUnder(w: Pt): MapIcon | null {
   for (let n = icons.length - 1; n >= 0; n--) if (hitIcon(icons[n], w.x, w.y)) return icons[n];
@@ -1549,6 +1561,9 @@ function stepSelectedIcons(dir: 1 | -1) {
 function syncSelIconRow() {
   const ics = selection && tool === "select" ? selection.icons : [];
   selIconRow.hidden = !ics.length;
+  const mixed = !!selection && (selection.cells.length + selection.vectors.length + selection.notes.length > 0 || ics.length > 1);
+  $("sel-icon-scale-row").hidden = !ics.length || !mixed;
+  $("sel-icon-tip").hidden = !ics.length || !mixed;
   if (!ics.length || document.activeElement === selIconSize) return;
   const sizes = new Set(ics.map((ic) => ic.size));
   selIconSize.value = sizes.size === 1 ? String(+worldToMeters(ics[0].size).toPrecision(4)) : "";
@@ -2305,6 +2320,20 @@ function drawSelection() {
     ctx.textBaseline = "alphabetic";
   }
   if (moveDrag) return;
+  if (iconDrag) {
+    const f = iconDrag.factor;
+    drawIcons(ctx, cam, selection.icons.map((ic) => ({ ...ic, size: ic.size * f })), (id) => imageStore.get(id), 1, new Set());
+  }
+  // 选区里每个图标自己的角手柄：拖一个角，选中的图标一起等比缩放
+  for (const h of iconHandles()) {
+    ctx.fillStyle = "#7aa2f7";
+    ctx.strokeStyle = "#fff";
+    ctx.lineWidth = 1;
+    ctx.beginPath();
+    ctx.arc(h.p.x, h.p.y, 3.5, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.stroke();
+  }
   for (const hd of selHandles()) {
     const corner = hd.hx && hd.hy;
     const r = corner ? 4 : 3.5;
@@ -2316,9 +2345,31 @@ function drawSelection() {
   }
 }
 
+/** 选区里图标各自的角手柄（屏幕坐标）。只选了一个图标时不画（和选区框的手柄重合）；图标太多或太小时也不画 */
+function iconHandles(): { ic: MapIcon; hx: number; hy: number; p: Pt }[] {
+  if (!selection || tool !== "select" || moveDrag || scaleDrag || !selection.icons.length) return [];
+  const only = !selection.cells.length && !selection.vectors.length && !selection.notes.length && selection.icons.length === 1;
+  if (only || selection.icons.length > 60) return [];
+  const out: { ic: MapIcon; hx: number; hy: number; p: Pt }[] = [];
+  for (const ic0 of selection.icons) {
+    const ic = iconDrag ? { ...ic0, size: ic0.size * iconDrag.factor } : ic0;
+    if (ic.size * cam.zoom < 14) continue;
+    const c = cam.worldToScreen(ic.x, ic.y), h = (ic.size * cam.zoom) / 2;
+    for (const [hx, hy] of [[-1, -1], [1, -1], [-1, 1], [1, 1]]) out.push({ ic: ic0, hx, hy, p: { x: c.x + hx * h, y: c.y + hy * h } });
+  }
+  return out;
+}
+function iconHandleAt(sx: number, sy: number) {
+  if (iconDrag) return null;
+  for (const h of iconHandles()) if (Math.abs(sx - h.p.x) <= 6 && Math.abs(sy - h.p.y) <= 6) return h;
+  return null;
+}
+/** 拖图标角手柄：factor 是所有选中图标的缩放倍数（拖动的那个图标边长对齐到笔刷格子） */
+let iconDrag: { ic: MapIcon; hx: number; hy: number; factor: number } | null = null;
+
 /** 选区框上的缩放手柄（屏幕坐标）：四角 + 四边中点；框太小时省掉边中点，框没有宽或高时不显示 */
 function selHandles(): { hx: number; hy: number; p: Pt }[] {
-  if (!selection || tool !== "select") return [];
+  if (!selection || tool !== "select" || iconDrag) return [];
   const b = scaleDrag ? scaleDrag.box : selection.box;
   if (b.x1 - b.x0 <= 0 || b.y1 - b.y0 <= 0) return [];
   const p0 = cam.worldToScreen(b.x0, b.y0), p1 = cam.worldToScreen(b.x1, b.y1);
@@ -2371,7 +2422,7 @@ function scaled(sel: Selection, nb: Box) {
     }
     return { ...v, a: map(v.a), b: map(v.b), bend: v.bend ? map(v.bend) : null };
   };
-  const iconScale = Math.sqrt(sx * sy);
+  const iconScale = selIconScale.checked ? Math.sqrt(sx * sy) : 1;
   const icon = (ic: MapIcon): MapIcon => ({ ...ic, ...map(ic), size: ic.size * iconScale });
   const note = (n: Note): Note => ({ ...n, ...map(n) });
   return { sx, sy, map, vector, icon, note };
@@ -2447,6 +2498,7 @@ canvas.addEventListener("pointerdown", (e) => {
     noteDrag = null;
     imgDrag = null;
     scaleDrag = null;
+    iconDrag = null;
     // 第二根手指落下：取消当前笔画（已画部分保留且可撤销），改为双指平移缩放
     endStroke();
     mode = "pinch";
@@ -2472,7 +2524,11 @@ canvas.addEventListener("pointerdown", (e) => {
     const w = cam.screenToWorld(p.x, p.y);
     const hitNote = noteHit(p.x, p.y);
     const sh = selHandleAt(p.x, p.y);
-    if (sh && selection) {
+    const ih = sh ? null : iconHandleAt(p.x, p.y);
+    if (ih && selection) {
+      mode = "iconScale";
+      iconDrag = { ic: ih.ic, hx: ih.hx, hy: ih.hy, factor: 1 };
+    } else if (sh && selection) {
       mode = "scale";
       scaleDrag = { hx: sh.hx, hy: sh.hy, start: w, box: { ...selection.box } };
     } else if (selection && inSelection(w)) {
@@ -2539,6 +2595,13 @@ canvas.addEventListener("pointermove", (e) => {
 
   if (mode === "marquee" && marquee) {
     marquee.b = cam.screenToWorld(p.x, p.y);
+  } else if (mode === "iconScale" && iconDrag) {
+    const w = cam.screenToWorld(p.x, p.y);
+    const ic = iconDrag.ic;
+    const st = levelStep(brushLevel(cam.zoom));
+    const half = Math.max(iconDrag.hx * (w.x - ic.x), iconDrag.hy * (w.y - ic.y));
+    const size = e.shiftKey ? Math.max(st / 4, 2 * half) : Math.max(1, Math.round((2 * half) / st)) * st;
+    iconDrag.factor = size / ic.size;
   } else if (mode === "scale" && scaleDrag && selection) {
     // 只选了图标时总是等比缩放（图标是正方形）
     const iconsOnly = !selection.cells.length && !selection.vectors.length && !selection.notes.length;
@@ -2591,6 +2654,10 @@ function endPointer(e: PointerEvent) {
     endImageDrag();
   } else if (pointers.size === 0 && mode === "noteDrag") {
     endNoteDrag();
+  } else if (pointers.size === 0 && mode === "iconScale" && iconDrag) {
+    const f = iconDrag.factor;
+    iconDrag = null;
+    if (f !== 1) resizeSelectedIcons((size) => size * f);
   } else if (pointers.size === 0 && mode === "scale" && scaleDrag) {
     const nb = scaleDrag.box;
     scaleDrag = null;
