@@ -98,15 +98,16 @@ class Importer:
     def __init__(self, plan, keep, backend="auto"):
         self.plan = plan
         self.keep = keep
-        self.blockout = None if backend == "cube" else BlockoutBackend.load(self)
-        if backend == "blockout" and self.blockout is None:
-            raise RuntimeError("没有找到 Blockout Tools 插件，请在 Edit → Plugins 里启用它，或者去掉 --backend blockout。")
         self.name = safe_name(plan.name)
         self.tag = unreal.Name(f"LevelLayout:{self.name}")
         self.actors = unreal.get_editor_subsystem(unreal.EditorActorSubsystem)
         self.cube = unreal.load_asset(CUBE)
         self.cylinder = unreal.load_asset(CYLINDER)
         self.materials = {}
+        # 最后再加载 Blockout：校准要用到上面的 self.actors
+        self.blockout = None if backend == "cube" else BlockoutBackend.load(self)
+        if backend == "blockout" and self.blockout is None:
+            raise RuntimeError("没有找到 Blockout Tools 插件，请在 Edit → Plugins 里启用它，或者去掉 --backend blockout。")
 
     # ---- 材质 ----
     def material(self, hexcolor):
@@ -120,8 +121,11 @@ class Importer:
             tools = unreal.AssetToolsHelpers.get_asset_tools()
             mi = tools.create_asset(asset_name, folder, unreal.MaterialInstanceConstant, unreal.MaterialInstanceConstantFactoryNew())
             unreal.MaterialEditingLibrary.set_material_instance_parent(mi, unreal.load_asset(BASE_MATERIAL))
-        ok = unreal.MaterialEditingLibrary.set_material_instance_vector_parameter_value(mi, "Color", hex_to_linear(hexcolor))
-        if not ok:
+        want = hex_to_linear(hexcolor)
+        unreal.MaterialEditingLibrary.set_material_instance_vector_parameter_value(mi, "Color", want)
+        # 5.8 里设置成功也可能返回 False，所以读回来比较
+        got = unreal.MaterialEditingLibrary.get_material_instance_vector_parameter_value(mi, "Color")
+        if abs(got.r - want.r) + abs(got.g - want.g) + abs(got.b - want.b) > 1e-3:
             unreal.log_warning(f"[LevelLayout] 材质没有 Color 参数，颜色 {hexcolor} 不会显示。")
         unreal.MaterialEditingLibrary.update_material_instance(mi)
         unreal.EditorAssetLibrary.save_loaded_asset(mi)
@@ -183,7 +187,7 @@ class Importer:
 
     def spawn_text(self, text, floor, loc, label, size=60):
         # 文字平放朝上，方便在顶视图里读（方向需要在 UE 里确认，见 README“待验证”）
-        a = self.actors.spawn_actor_from_class(unreal.TextRenderActor, unreal.Vector(*loc), unreal.Rotator(roll=0.0, pitch=90.0, yaw=0.0))
+        a = self.actors.spawn_actor_from_class(unreal.TextRenderActor, unreal.Vector(*loc), unreal.Rotator(roll=0.0, pitch=90.0, yaw=90.0))  # 已在 UE 5.8 确认：顶视图正着读
         comp = a.get_editor_property("text_render")
         comp.set_text(text)
         comp.set_world_size(size)
@@ -248,7 +252,7 @@ class BlockoutBackend:
         test = (100.0, 200.0, 300.0)
         a = self._spawn_raw(test, (0.0, 0.0, -100000.0), 0.0)
         try:
-            origin, extent = a.get_actor_bounds(False)
+            origin, extent = self.mesh_bounds(a)
             loc = a.get_actor_location()
             actual = (extent.x * 2, extent.y * 2, extent.z * 2)
             if min(actual) <= 0:
@@ -259,6 +263,20 @@ class BlockoutBackend:
         finally:
             self.imp.actors.destroy_actor(a)
 
+    @staticmethod
+    def mesh_bounds(actor):
+        """只量 StaticMeshComponent 的包围盒（蓝图里还有一个约 256 cm 的图标组件，用 get_actor_bounds 会被算进去）"""
+        lo, hi = [math.inf] * 3, [-math.inf] * 3
+        for comp in actor.get_components_by_class(unreal.StaticMeshComponent):
+            o, e, _ = unreal.SystemLibrary.get_component_bounds(comp)
+            for i, (c, h) in enumerate(((o.x, e.x), (o.y, e.y), (o.z, e.z))):
+                lo[i], hi[i] = min(lo[i], c - h), max(hi[i], c + h)
+        if lo[0] == math.inf:
+            raise RuntimeError("测试盒子没有网格体组件")
+        origin = unreal.Vector((lo[0] + hi[0]) / 2, (lo[1] + hi[1]) / 2, (lo[2] + hi[2]) / 2)
+        extent = unreal.Vector((hi[0] - lo[0]) / 2, (hi[1] - lo[1]) / 2, (hi[2] - lo[2]) / 2)
+        return origin, extent
+
     def spawn_box(self, b):
         size = tuple(b.size[i] / self.factor[i] for i in range(3))
         # 枢轴偏移（局部坐标）转到世界坐标，再从目标中心减掉
@@ -268,6 +286,7 @@ class BlockoutBackend:
         a = self._spawn_raw(size, (b.center[0] - wx, b.center[1] - wy, b.center[2] - oz), b.yaw)
         a.set_editor_property("BlockoutMaterialColor", hex_to_linear(b.color))
         a.set_editor_property("bBlockoutWorldAligned", True)
+        a.set_editor_property("bBlockoutMaterialUseTopColor", False)  # 否则顶面统一盖成深灰，顶视图看不出颜色
         a.set_editor_property("BlockoutMaterialGridSize", BLOCKOUT_GRID_SIZE_CM * self.imp.plan.meters_per_cell)
         if b.role in ("water", "hazard"):
             a.set_editor_property("bBlockoutEnableCustomCollision", True)
