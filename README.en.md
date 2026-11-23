@@ -9,6 +9,7 @@ A layout drawing tool for game level design. It helps level designers sketch, it
 - Sketch level layouts fast: areas, paths, obstacles, spawn points, goals and more
 - Make changes and iterate on level ideas easily
 - Export and share layouts so the team can discuss them
+- Import into Unreal Engine and generate a same-scale whitebox in one click (see [Import into Unreal Engine](#import-into-unreal-engine-one-click-whitebox))
 
 ## Use it online
 
@@ -45,6 +46,26 @@ It is a single self-contained HTML file with all the code inside. You can send i
 
 ![Exported image](docs/images/export-en.png)
 
+## Screenshots
+
+**Generate a layout from a reference image**: import a floor plan and click **Generate layout from this image…**. Smart detect works out walls, floor, grass, water and lava from the colors, previews the result on the canvas, and applies it in one step.
+
+![Generate a layout from a reference image](docs/images/smart-layout-en.png)
+
+![The source image and the generated layout](docs/images/smart-layout-result.png)
+
+**Resize a selection**: drag the corner or edge handles of the selection box to resize cells, shapes, icons and notes together. Each selected icon has small corner dots to resize only the icons; the panel also takes an icon size in meters, and **Scale icons with the selection** can be turned off.
+
+![Selection resize and icon handles](docs/images/selection-resize-en.png)
+
+**Reference image snapping**: while you drag a reference image it snaps to grid lines and to the edges and center lines of other images, with pink guide lines, so several screenshots line up seamlessly.
+
+![Reference image snapping](docs/images/image-snap-en.png)
+
+**Real-world scale**: by default 1 cell = 1 meter, with meter labels on the axes; change the scale at the bottom right. Each color key entry says what it becomes in the engine (wall, floor, water, hazard…), and the bottom of the Levels panel sets elevation and wall height, which the UE importer uses directly.
+
+![Sample project with engine settings](docs/images/web-sample-en.png)
+
 ## Features
 
 - Infinite grid: drag to pan, scroll to zoom around the cursor, trackpad pinch and two-finger scroll, two-finger touch zoom
@@ -60,17 +81,69 @@ It is a single self-contained HTML file with all the code inside. You can send i
 - Select (`V`): drag a box to select cells and smooth shapes on the current level, drag inside it to move (snapped to the grid), drag the corner or edge handles to resize it (snapped to the grid; hold Shift on a corner to keep proportions; cells are resampled, shapes, icons and notes scale with it), nudge with arrow keys (Shift for 10 cells), click a color (or press `1`-`9`) to recolor the selection, press `R` (or ↻ 90° in the panel) to rotate it 90° clockwise and `Shift+R` counterclockwise (icons and note text stay upright, and four turns bring it back exactly), `Delete` to remove, `Esc` to cancel, `Ctrl+A` to select the whole level. Moves and deletes are undoable
 - Notes (`N`): click empty canvas to add a text note, click a note to edit it. Drag the label or the pin separately and the leader line stretches to follow (this also works with the Select tool; a selected note moves as a whole). Double-click a note with any tool to edit. Notes belong to a level, notes on other levels are faded, and they can be selected, moved, deleted and undone
 - Icons (`I`): 21 level icons, including stairs up/down, ladder, door, locked door, key, chest, trap, save point, spawn, goal, boss, enemy, NPC, shop, heal, item, switch, teleporter, hazard and camera. Pick one and click to place it, sized in cells. **+ Import icons** turns your own images (PNG / SVG / JPG / WebP) into icons that you can rename or remove. The placement size is set in cells, with the size in meters shown next to it (`[` `]` change it quickly). Icons belong to a level and can be erased. With the Select tool, click an icon to select it and drag to move it; once selected, drag a corner to resize it proportionally, or type a size in meters in the panel's **Icon** row, click − / +, or press `[` `]` (several icons each scale around their own center; undoable). When a selection mixes cells, shapes and icons, each icon shows small dots on its corners: drag one to resize only the selected icons. Untick **Scale icons with the selection** in the panel to keep icon sizes when you resize the selection box (icons then only move)
-- Reference images: **Reference** in the top bar imports an image (you can also drop an image onto the canvas or paste a screenshot with Ctrl+V) to trace over beneath the grid. With the Select tool, drag to move, drag a corner to resize proportionally (hold Shift for free resizing), drag an edge to stretch one side, and drag the dot above the image to rotate it (hold Shift for 15° steps). While moving or resizing, images snap to grid lines and to the edges and center lines of other reference images, with pink guide lines; rotation snaps upright near 0°/90°/180°/270°. Untick **Snap** in the panel to turn this off, or hold Alt to skip it for one drag. or type an angle or use ↺ / ↻ in the panel to turn 90° (`R` works too); the panel sets opacity, lock, bring to front and delete. Locked images let clicks pass through; double-click with the Select tool to select one again. Reference images belong to a level and can be included in exports
+- Reference images: **Reference** in the top bar imports an image (you can also drop an image onto the canvas or paste a screenshot with Ctrl+V) to trace over beneath the grid. With the Select tool, drag to move, drag a corner to resize proportionally (hold Shift for free resizing), drag an edge to stretch one side, and drag the dot above the image to rotate it (hold Shift for 15° steps). While moving or resizing, images snap to grid lines and to the edges and center lines of other reference images, with pink guide lines; rotation snaps upright near 0°/90°/180°/270°. Untick **Snap** in the panel to turn this off, or hold Alt to skip it for one drag. Or type an angle or use ↺ / ↻ in the panel to turn 90° (`R` works too); the panel sets opacity, lock, bring to front and delete. Locked images let clicks pass through; double-click with the Select tool to select one again. Reference images belong to a level and can be included in exports
 - Generate a layout from a reference image: select the image and click **Generate layout from this image…** in its panel. There are three methods. **Smart detect** (the default) works out the terrain from what the colors mean: black or dark gray lines and gray blocks are walls, blue and cyan are water, green is grass, bright red and orange are lava / damage, and beige, brown, light gray and the like are floor, while white background is skipped. Thin wall lines are still caught, and holes left by text and small icons are filled in. Each terrain uses the color-key entry of the same kind (walls, water and damage by engine type, grass by name); missing entries are added automatically, and you can untick any terrain. **Match colors** turns each cell into the closest color-key color (good for colored plans; black or dark gray lines can count as walls, and white background is skipped). **Line art** fills dark areas with one color (good for black-and-white drawings and scans). Choose the cell size (shown in meters), tolerance or darkness, which colors to use, and whether to remove specks. The canvas shows a preview first; click **Generate** to apply it as one undoable step. Everything runs in the browser and the image is never uploaded
 - Levels: 1F, 2F, B1 and so on. Add above or below, switch and delete in the **Levels** panel at the bottom left (PageUp / PageDown to switch). The current level is fully opaque and each level further away is fainter (40%, 16%, …); turn off **Show others** to hide them. Undo jumps to the level that changed
 - Eraser, undo/redo, and Clear (current level only); everything is saved automatically in the browser
 - Export image (`Ctrl+Shift+S`): current level only, one image per level (in a ZIP), or all levels in one tall image. Options: crop to content or the current view, resolution (8–64 pixels per cell), light or dark background, and whether to include grid lines, notes and reference images. Levels can share the same area so the images line up. Each image has the project and level name at the top and the color and icon key along the bottom; empty levels are skipped, and very large images are scaled down automatically
 - Icon key: under the Color key, the icons used in the map are listed, and their text can be changed to say what each one means (for example "Chest" to "Gold chest (random)"). Exported images use these descriptions
 - Export / import project files (`.json`, with all levels, notes, color key, project name and view). See [docs/project-file-format.md](docs/project-file-format.md) for the format (in Chinese)
-- Ready for game engine import (project file version 5): under each color key entry, pick what it becomes in the engine (**Wall / Floor / Water / Hazard / Marker (no geometry) / Ignore**); walls can have their own height (for example a 1.2 m low wall). The bottom of the Levels panel sets the current level's elevation and wall height (empty = defaults: 5 m per level, 4 m walls). Spawn, camera, door, stairs and similar icons show a small arrow for their facing, which turns when you rotate a selection with R. The UE import prototype is in [engine/unreal/prototype](engine/unreal/prototype) (in Chinese)
+- Ready for game engine import (project file version 5): under each color key entry, pick what it becomes in the engine (**Wall / Floor / Water / Hazard / Marker (no geometry) / Ignore**); walls can have their own height (for example a 1.2 m low wall). The bottom of the Levels panel sets the current level's elevation and wall height (empty = defaults: 5 m per level, 4 m walls). Spawn, camera, door, stairs and similar icons show a small arrow for their facing, which turns when you rotate a selection with R. See [Import into Unreal Engine](#import-into-unreal-engine-one-click-whitebox) below
 - Panning is separate from painting: hold Space and drag, drag with the right or middle mouse button, or switch to the **Pan** tool; two-finger pan and zoom on touch screens
 - Chinese / English switch: the **EN / 中文** button at the right end of the top toolbar switches the interface, tips, default color and icon names, level names and exported images. Your choice is remembered
 - Shortcuts: `B` brush, `E` eraser, `A` arc, `G` shape, `I` icon, `H` pan, `1`-`9` pick a color, `Ctrl+Z` undo, `Ctrl+Shift+Z` redo, `Ctrl+S` export, `Ctrl+O` import, `0` reset view, `+` / `-` zoom
+
+## Import into Unreal Engine: one-click whitebox
+
+The repository includes a UE 5.8 editor plugin, [Level Layout Importer](engine/unreal/LevelLayoutImporter), that turns an exported `.json` project file into a **whitebox at the same scale** in one go: walls, floors, water, hazards, door openings, stairs, player start, cameras, note text and a NavMesh bounds volume are all placed for you, with sizes suited to a third-person action RPG (4 m walls, 5 m per level and 2 × 3 m doors by default). It has been built and tested in UE 5.8.4.
+
+![The sample project generated as a whitebox in UE](docs/images/ue-whitebox.jpg)
+
+### 1. Prepare in the web tool
+
+1. In the **Color key** on the right, choose what each color becomes in the engine: **Wall / Floor / Water / Hazard / Marker (no geometry) / Ignore**. Walls can have their own height (for example a 1.2 m low wall); leave it empty to use the level's wall height.
+2. At the bottom of the **Levels** panel, set each level's **Elevation** and **Wall height** (empty = defaults: 5 m per level, 4 m walls).
+3. Put door and locked door icons on a wall (they cut a doorway). Put stairs up / stairs down icons in the middle of where the stairs go; the small arrow outside the icon is its facing (select it and press `R` to turn it), and the stairs climb in that direction. Stairs for a 5 m level are 7.5 m long, so leave room.
+4. Click **Export** in the top bar to save the `.json` project file.
+
+### 2. Install the plugin
+
+1. Copy the whole `engine/unreal/LevelLayoutImporter` folder into your UE project's `Plugins/` folder (create it if needed).
+2. The project must be able to compile C++: install Visual Studio 2022 with "Game development with C++". A Blueprint-only project asks to build the plugin the first time it opens; choose Yes.
+3. Open the project and make sure **Level Layout Importer** is enabled under **Edit → Plugins**.
+
+### 3. Import
+
+Open the level that should hold the whitebox, choose **Tools → Level Layout → Import Level Layout...**, pick the project file, adjust the options in the dialog and click **Import**. The whole import is one undo step, so one `Ctrl+Z` removes it all; importing the same project again replaces the previous result.
+
+![Import Level Layout in the Tools menu](docs/images/ue-tools-menu.jpg)
+
+You can also type a command in the Output Log's Cmd box (no spaces in the path):
+
+```
+LevelLayout.Import D:/Levels/Level1.json
+LevelLayout.Remove Level1
+```
+
+### What gets generated
+
+| In the web tool | In UE |
+| --- | --- |
+| Cells and lines whose color is a Wall | Walls (neighboring cells are merged into large blocks, one box each) |
+| Floor | Floor slabs, top face at the level's elevation |
+| Water / Hazard | A slightly lower thin slab plus a water PhysicsVolume / damaging PainCausingVolume |
+| Filled circles, triangles, polygons | Static meshes extruded from the shape |
+| Door icons | A 2 × 3 m doorway cut into the wall |
+| Stairs up / stairs down icons | A straight staircase to the level above / below, with a stairwell cut into the upper floor |
+| Spawn / camera icons | PlayerStart / CameraActor |
+| Other icons | A small labeled cylinder, or your own Blueprint (an enemy spawner, a chest…) mapped in Project Settings |
+| Notes | Flat text (a font asset with Chinese glyphs is generated from a system font when needed) |
+
+![Multi-level whitebox: stairs and the stairwell in the level above](docs/images/ue-stairs.jpg)
+
+If the project has the **Blockout Tools** plugin from Fab enabled, walls and floors use its Blockout Box (with its grid material); otherwise the engine Cube is used. Change the defaults under **Project Settings → Plugins → Level Layout Importer**.
+
+See the plugin's own guide, [engine/unreal/LevelLayoutImporter/README.md](engine/unreal/LevelLayoutImporter/README.md) (in Chinese), for every option, the Python / Blueprint API and how to run the tests. If you would rather not compile C++, the [Python prototype](engine/unreal/prototype) does the basics (no doorways or stairs). Try it first with the sample project [SampleProject.json](engine/unreal/LevelLayoutImporter/Resources/SampleProject.json).
 
 ## Layout
 
@@ -93,7 +166,7 @@ After changing the code, run `npm run build:single` and commit the new `release/
 
 ## Tech stack
 
-Vite + TypeScript. Rendering uses plain Canvas 2D and draws only the grid lines in view. The camera (world ↔ screen coordinates) is in `src/camera.ts`, grid drawing in `src/grid.ts`, painted cell data and drawing in `src/cells.ts`, and the interface text and translations in `src/i18n.ts`.
+Vite + TypeScript. Rendering uses plain Canvas 2D and draws only the grid lines in view. The camera (world ↔ screen coordinates) is in `src/camera.ts`, grid drawing in `src/grid.ts`, painted cell data and drawing in `src/cells.ts`, and the interface text and translations in `src/i18n.ts`. The UE plugin and Python prototype live in `engine/unreal/`.
 
 ## License
 

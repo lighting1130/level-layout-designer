@@ -94,7 +94,8 @@ button:disabled { opacity: 0.4; cursor: default; }
 }
 .opt-col { display: flex; flex-direction: column; gap: 8px; }
 .opt-row { display: flex; align-items: center; gap: 6px; }
-.opt-label { width: 32px; opacity: 0.7; }
+.opt-label { min-width: 32px; flex-shrink: 0; white-space: nowrap; opacity: 0.7; }
+.tool-options button { white-space: nowrap; }
 .icon-name { font-weight: 600; }
 .icon-grid { display: grid; grid-template-columns: repeat(6, 30px); gap: 4px; max-height: 240px; overflow-y: auto; }
 .icon-grid button { width: 30px; height: 30px; padding: 0; display: grid; place-items: center; border-radius: 6px; }
@@ -106,6 +107,8 @@ button:disabled { opacity: 0.4; cursor: default; }
 #sel-icon-size { width: 64px; }
 #sel-icon-row .opt-label { white-space: nowrap; }
 .image-options { width: 220px; box-sizing: border-box; }
+/* 英文标签和按钮更长，面板放宽，避免折行、标签压到滑块上 */
+html[lang="en"] .image-options { width: 280px; }
 .image-options .opt-tip { font-size: 12px; opacity: 0.6; margin-left: auto; }
 .image-options input[type="range"] { flex: 1; min-width: 0; accent-color: #7aa2f7; }
 .image-options .opt-num { width: 36px; text-align: right; font-variant-numeric: tabular-nums; }
@@ -181,8 +184,11 @@ select {
 .check { display: inline-flex; align-items: center; gap: 4px; cursor: pointer; padding: 0 4px; }
 .hint {
   position: fixed; left: 50%; top: 64px; transform: translateX(-50%); padding: 5px 12px; border-radius: 6px;
-  background: rgba(30, 33, 39, 0.92); border: 1px solid #3a3f4b; pointer-events: none; white-space: nowrap;
+  background: rgba(30, 33, 39, 0.92); border: 1px solid #3a3f4b; pointer-events: none;
+  /* 宽屏上不压住左侧的选项面板（中文最宽约 380px，英文约 420px），太长就折成两行 */
+  width: max-content; max-width: max(320px, calc(100vw - 780px)); text-align: center;
 }
+html[lang="en"] .hint { max-width: max(320px, calc(100vw - 860px)); }
 .toast {
   position: fixed; left: 50%; bottom: 64px; transform: translateX(-50%); max-width: calc(100% - 32px);
   padding: 8px 14px; border-radius: 8px; background: #2c313a; border: 1px solid #3a3f4b; box-sizing: border-box;
@@ -222,6 +228,8 @@ select {
 .hud-unit input[type="number"] { width: 52px; }
 
 .trace-options { width: 300px; }
+html[lang="en"] .trace-options { width: 340px; }
+.trace-options .check { white-space: nowrap; }
 .trace-options select { flex: 1; min-width: 0; }
 .trace-colors { display: flex; flex-direction: column; gap: 6px; }
 .trace-chips { display: flex; flex-wrap: wrap; gap: 4px; }

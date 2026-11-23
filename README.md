@@ -9,6 +9,7 @@
 - 快速绘制关卡的平面布局（区域、路径、障碍、出生点、目标点等）
 - 方便地修改和迭代关卡方案
 - 导出与分享关卡布局图，便于团队沟通
+- 导入 Unreal Engine，一键生成同比例的白盒（见[导入 Unreal Engine](#导入-unreal-engine一键生成白盒)）
 
 ## 在线使用
 
@@ -46,6 +47,26 @@
 
 > 想用英文界面？点顶部工具栏最右边的「EN」按钮。
 
+## 功能截图
+
+**从参考图生成 layout**：导入一张平面图，点「从这张图生成 layout…」，智能识别会按颜色判断墙、地面、草地、水域和岩浆，先在画布上预览，满意后一键生成。
+
+![从参考图生成 layout](docs/images/smart-layout.png)
+
+![原图和生成结果](docs/images/smart-layout-result.png)
+
+**框选缩放**：拖选区框的四角、四边缩放，格子、图形、图标和备注一起变；框选里的每个图标角上有小圆点，可以只缩放图标；面板里能按米输入图标大小，或取消「缩放选区时图标也缩放」。
+
+![框选缩放和图标手柄](docs/images/selection-resize.png)
+
+**参考图自动吸附**：拖动参考图时会吸附到格线和其他参考图的边、中线，粉色参考线提示对齐位置，多张截图可以无缝拼起来。
+
+![参考图吸附](docs/images/image-snap.png)
+
+**现实尺寸**：默认 1 格 = 1 米，坐标轴上标出米数刻度，右下角可以改每格多少米。颜色说明里可以设置每种颜色在引擎里是什么（墙、地面、水域、伤害区……），楼层面板底部设标高和墙高，导入 UE 时直接使用。
+
+![带引擎设置的示例工程](docs/images/web-sample.png)
+
 ## 当前功能
 
 - 无限延伸的方格背景：拖拽平移、滚轮以光标为中心缩放，触控板捏合/双指滑动、触屏双指缩放
@@ -68,10 +89,62 @@
 - 导出图片（`Ctrl+Shift+S`）：只导出当前层、每层单独一张（打包成 ZIP），或所有楼层拼成一张长图。可选自动裁剪到内容或当前屏幕范围、清晰度（每格 8–64 像素）、浅色/深色背景、是否带网格线/备注/参考图；各层可对齐同一范围，方便叠图对照。每张图顶部有工程名和楼层名，底部横排颜色说明和图标说明，空楼层自动跳过，图太大时自动降低清晰度
 - 图标说明：右侧“颜色说明”下面会列出关卡里用到的图标，文字可以改成具体含义（比如“宝箱”改成“金币宝箱（随机）”），导出图片时使用
 - 导出 / 导入工程文件（`.json`，包含所有楼层、备注、颜色说明、工程名和视角），格式见 [docs/project-file-format.md](docs/project-file-format.md)
-- 为导入游戏引擎做准备（工程文件 version 5）：颜色说明每一项下面可以选它在引擎里是「墙 / 地面 / 水域 / 伤害区 / 标记（不生成）/ 忽略」，墙还可以单独设高度（比如矮墙 1.2 m）；楼层面板底部可以设当前层的标高和墙高（留空用默认：层高 5 m、墙高 4 m）；出生点、镜头、门、楼梯等图标外侧有一个小箭头表示朝向，框选后按 R 旋转时朝向跟着转。UE 导入原型见 [engine/unreal/prototype](engine/unreal/prototype)
+- 为导入游戏引擎做准备（工程文件 version 5）：颜色说明每一项下面可以选它在引擎里是「墙 / 地面 / 水域 / 伤害区 / 标记（不生成）/ 忽略」，墙还可以单独设高度（比如矮墙 1.2 m）；楼层面板底部可以设当前层的标高和墙高（留空用默认：层高 5 m、墙高 4 m）；出生点、镜头、门、楼梯等图标外侧有一个小箭头表示朝向，框选后按 R 旋转时朝向跟着转。导入 UE 的方法见下面的[导入 Unreal Engine](#导入-unreal-engine一键生成白盒)
 - 平移与涂色分开：按住空格拖拽、右键/中键拖拽，或切换到“平移”工具；触屏双指平移缩放
 - 中英文切换：顶部工具栏最右边的「EN / 中文」按钮，界面、提示、默认颜色名、图标名、楼层名（英文为 1F、2F、B1）和导出的图片都会跟着切换，选择会记住
 - 快捷键：`B` 画笔、`E` 橡皮、`A` 弧线、`G` 图形、`I` 图标、`H` 平移、`1`-`9` 选色、`Ctrl+Z` 撤销、`Ctrl+Shift+Z` 重做、`Ctrl+S` 导出、`Ctrl+O` 导入、`0` 复位、`+` / `-` 缩放
+
+## 导入 Unreal Engine：一键生成白盒
+
+仓库里带了一个 UE 5.8 编辑器插件 [Level Layout Importer](engine/unreal/LevelLayoutImporter)，把网页导出的 `.json` 工程文件一次性生成成**同比例的白盒**：墙、地面、水域、伤害区、门洞、楼梯、出生点、镜头、备注文字和 NavMesh 范围都会自动摆好，适合第三人称动作 RPG 的尺寸（默认墙高 4 m、层高 5 m、门 2 × 3 m）。在 UE 5.8.4 里编译和测试过。
+
+![网页里的示例工程在 UE 里生成的白盒](docs/images/ue-whitebox.jpg)
+
+### 1. 在网页里准备
+
+1. 在右侧「颜色说明」里，给每种颜色选它在引擎里是什么：**墙 / 地面 / 水域 / 伤害区 / 标记（不生成）/ 忽略**。墙可以单独填高度（比如矮墙 1.2 m），留空用楼层墙高。
+2. 在左下「楼层」面板底部设每层的**标高**和**墙高**（留空用默认：层高 5 m、墙高 4 m）。
+3. 门、锁着的门图标要放在墙上（会开门洞）；上楼梯、下楼梯图标放在楼梯中间，图标外侧的小箭头是朝向（框选后按 `R` 转），楼梯会朝箭头方向往上走。注意 5 m 层高的楼梯有 7.5 m 长，画的时候留出位置。
+4. 点顶部「导出」，得到 `.json` 工程文件。
+
+### 2. 安装插件
+
+1. 把仓库里的 `engine/unreal/LevelLayoutImporter` 整个文件夹复制到你的 UE 项目的 `Plugins/` 文件夹下（没有就新建）。
+2. 需要能编译 C++：装 Visual Studio 2022（勾选“使用 C++ 的游戏开发”）。纯蓝图项目第一次打开时 UE 会提示编译插件，选“是”。
+3. 打开项目，在 **Edit → Plugins** 里确认 **Level Layout Importer** 已启用。
+
+### 3. 导入
+
+打开要放白盒的关卡，点菜单 **Tools → Level Layout → Import Level Layout...**，选工程文件，在对话框里调整选项后点 **Import**。整次导入是一个撤销步骤，`Ctrl+Z` 一下全部撤掉；再次导入同一个工程会替换上次生成的结果。
+
+![Tools 菜单里的 Import Level Layout](docs/images/ue-tools-menu.jpg)
+
+也可以在 Output Log 的 Cmd 里输入命令（路径里不要有空格）：
+
+```
+LevelLayout.Import D:/Levels/第一关.json
+LevelLayout.Remove 第一关
+```
+
+### 会生成什么
+
+| 网页里 | UE 里 |
+| --- | --- |
+| 角色为“墙”的格子和线条 | 墙（相邻格子合并成大块，每块一个盒子） |
+| “地面” | 楼板，顶面在本层标高 |
+| “水域”“伤害区” | 略低的薄板 + 水的 PhysicsVolume / 伤害的 PainCausingVolume |
+| 填充的圆、三角形、多边形 | 按形状挤出的 Static Mesh |
+| 门图标 | 在墙上开 2 × 3 m 门洞 |
+| 上楼梯 / 下楼梯图标 | 通往上一层 / 下一层的直跑楼梯，上一层地面自动开楼梯井 |
+| 出生点 / 镜头图标 | PlayerStart / CameraActor |
+| 其它图标 | 带名字的小圆柱，也可以在项目设置里换成你自己的蓝图（比如敌人刷新点、宝箱） |
+| 备注 | 平放的文字（中文会自动用系统字体生成字体资产） |
+
+![多层白盒：楼梯和上一层的楼梯井](docs/images/ue-stairs.jpg)
+
+如果项目里启用了 Fab 上的 **Blockout Tools** 插件，墙和地面会自动用它的 Blockout Box（带网格材质），否则用引擎自带的 Cube。默认值在 **Project Settings → Plugins → Level Layout Importer** 里改。
+
+更多选项、Python / 蓝图接口和测试方法见插件说明 [engine/unreal/LevelLayoutImporter/README.md](engine/unreal/LevelLayoutImporter/README.md)。不想编译 C++ 的话，也可以用 [Python 原型](engine/unreal/prototype)（功能少一些：不开门洞、不建楼梯）。可以先拿示例工程 [SampleProject.json](engine/unreal/LevelLayoutImporter/Resources/SampleProject.json) 试一下。
 
 ## 界面
 
@@ -94,7 +167,7 @@ npm run build:single   # 再打包成一个独立文件 release/level-layout-des
 
 ## 技术栈
 
-Vite + TypeScript，网格用原生 Canvas 2D 只绘制可见区域内的线。相机（世界坐标 ↔ 屏幕坐标）在 `src/camera.ts`，网格绘制在 `src/grid.ts`，涂色格子数据与绘制在 `src/cells.ts`。
+Vite + TypeScript，网格用原生 Canvas 2D 只绘制可见区域内的线。相机（世界坐标 ↔ 屏幕坐标）在 `src/camera.ts`，网格绘制在 `src/grid.ts`，涂色格子数据与绘制在 `src/cells.ts`。UE 插件和 Python 原型在 `engine/unreal/`。
 
 ## 许可证
 
