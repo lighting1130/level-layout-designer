@@ -764,7 +764,7 @@ function drawHover() {
       : hover && imageHandleAt(hover.x, hover.y) ? resizeCursor(imageHandleAt(hover.x, hover.y)!.hx, imageHandleAt(hover.x, hover.y)!.hy, imgSel?.rot)
       : scaleDrag ? resizeCursor(scaleDrag.hx, scaleDrag.hy)
       : hover && selHandleAt(hover.x, hover.y) ? resizeCursor(selHandleAt(hover.x, hover.y)!.hx, selHandleAt(hover.x, hover.y)!.hy)
-      : hover && ((selection && inSelection(cam.screenToWorld(hover.x, hover.y))) || noteAt(hover.x, hover.y) || imageAt(hover.x, hover.y)) ? "move" : "default";
+      : hover && ((selection && inSelection(cam.screenToWorld(hover.x, hover.y))) || noteAt(hover.x, hover.y) || iconUnder(cam.screenToWorld(hover.x, hover.y)) || imageAt(hover.x, hover.y)) ? "move" : "default";
     return;
   }
   canvas.style.cursor = "";
@@ -842,6 +842,8 @@ function frame() {
     hudFloor.textContent = floorName(currentLevel);
     syncImagePanel();
     selectPanel.hidden = !(selection && tool === "select" && !moveDrag && !scaleDrag);
+    if (!selectPanel.hidden) syncSelIconRow();
+    if (tool === "icon") iconSizeM.textContent = `= ${formatLength(worldToMeters(iconSize * levelStep(bk)))}`;
   }
   requestAnimationFrame(frame);
 }
@@ -1515,6 +1517,51 @@ async function importImageFile(file: Blob, at?: Pt) {
 
 const imagePanel = $("image-options");
 const selectPanel = $("select-options");
+const selIconRow = $("sel-icon-row");
+const selIconSize = $("sel-icon-size") as HTMLInputElement;
+/** 点中的图标（最上面的一个） */
+function iconUnder(w: Pt): MapIcon | null {
+  for (let n = icons.length - 1; n >= 0; n--) if (hitIcon(icons[n], w.x, w.y)) return icons[n];
+  return null;
+}
+/** 改选中图标的大小（各自以中心缩放），一步可撤销 */
+function resizeSelectedIcons(fn: (size: number) => number) {
+  if (!selection || !selection.icons.length) return;
+  const min = levelStep(brushLevel(cam.zoom)) / 10;
+  const map = new Map(selection.icons.map((ic) => [ic, { ...ic, size: Math.max(min, fn(ic.size)) }]));
+  if ([...map].every(([a, b]) => a.size === b.size)) return;
+  const before = icons;
+  icons = icons.map((ic) => map.get(ic) ?? ic);
+  commit(new Map(), undefined, undefined, undefined, before);
+  const step = selection.step, pivot = selection.pivot;
+  selection = makeSelection(selection.cells, selection.vectors, selection.notes, selection.icons.map((ic) => map.get(ic)!));
+  if (selection) { selection.step = step; selection.pivot = pivot; }
+  requestRender();
+}
+/** 每按一下 −/+ 或 [ ]：按当前笔刷格子加减一格 */
+function stepSelectedIcons(dir: 1 | -1) {
+  const s = levelStep(brushLevel(cam.zoom));
+  resizeSelectedIcons((size) => {
+    const n = Math.round(size / s);
+    return Math.abs(n * s - size) < 1e-9 ? Math.max(1, n + dir) * s : Math.max(1, dir > 0 ? Math.ceil(size / s) : Math.floor(size / s)) * s;
+  });
+}
+function syncSelIconRow() {
+  const ics = selection && tool === "select" ? selection.icons : [];
+  selIconRow.hidden = !ics.length;
+  if (!ics.length || document.activeElement === selIconSize) return;
+  const sizes = new Set(ics.map((ic) => ic.size));
+  selIconSize.value = sizes.size === 1 ? String(+worldToMeters(ics[0].size).toPrecision(4)) : "";
+  selIconSize.placeholder = sizes.size === 1 ? "" : t("多种");
+}
+$("sel-icon-dec").addEventListener("click", () => stepSelectedIcons(-1));
+$("sel-icon-inc").addEventListener("click", () => stepSelectedIcons(1));
+selIconSize.addEventListener("change", () => {
+  const m = parseFloat(selIconSize.value);
+  if (m > 0 && isFinite(m)) resizeSelectedIcons(() => (m / getMetersPerCell()) * CELL_SIZE);
+  selIconSize.blur();
+});
+selIconSize.addEventListener("keydown", (e) => { if (e.key === "Enter" || e.key === "Escape") selIconSize.blur(); });
 $("sel-rot-ccw").addEventListener("click", () => rotateSelection(-1));
 $("sel-rot-cw").addEventListener("click", () => rotateSelection(1));
 const imageOpacity = $("image-opacity") as HTMLInputElement;
@@ -1879,6 +1926,7 @@ function placeIcon(sx: number, sy: number) {
 
 const iconGrid = $("icon-grid");
 const iconSizeInput = $("icon-size") as HTMLInputElement;
+const iconSizeM = $("icon-size-m");
 const iconRename = $("icon-rename") as HTMLInputElement;
 function setIconKind(kind: string) {
   iconKind = kind;
@@ -2434,6 +2482,12 @@ canvas.addEventListener("pointerdown", (e) => {
       selection = null;
       imgSel = null;
       beginNoteDrag(hitNote, p);
+    } else if (iconUnder(w)) {
+      // 点图标直接选中它，按住还能直接拖走；选中后拖角缩放，或在面板里改大小
+      imgSel = null;
+      selection = makeSelection([], [], [], [iconUnder(w)!]);
+      mode = "move";
+      moveDrag = { start: w, dx: 0, dy: 0 };
     } else if (imageHandleAt(p.x, p.y)) {
       const hd = imageHandleAt(p.x, p.y)!;
       beginImageDrag(imgSel!, hd.kind, p, hd.hx, hd.hy);
@@ -2486,7 +2540,9 @@ canvas.addEventListener("pointermove", (e) => {
   if (mode === "marquee" && marquee) {
     marquee.b = cam.screenToWorld(p.x, p.y);
   } else if (mode === "scale" && scaleDrag && selection) {
-    scaleDrag.box = scaleBox(selection, scaleDrag, cam.screenToWorld(p.x, p.y), e.shiftKey);
+    // 只选了图标时总是等比缩放（图标是正方形）
+    const iconsOnly = !selection.cells.length && !selection.vectors.length && !selection.notes.length;
+    scaleDrag.box = scaleBox(selection, scaleDrag, cam.screenToWorld(p.x, p.y), e.shiftKey || iconsOnly);
   } else if (mode === "move" && moveDrag && selection) {
     const w = cam.screenToWorld(p.x, p.y);
     const st = selection.step;
@@ -2659,6 +2715,8 @@ window.addEventListener("keydown", (e) => {
   else if (e.key === "e" || e.key === "E") setTool("eraser");
   else if (e.key === "h" || e.key === "H") setTool("hand");
   else if (e.key === "a" || e.key === "A") setTool("arc");
+  else if ((e.key === "[" || e.key === "]") && tool === "icon") setIconSize(iconSize + (e.key === "]" ? 1 : -1));
+  else if ((e.key === "[" || e.key === "]") && tool === "select" && selection?.icons.length) stepSelectedIcons(e.key === "]" ? 1 : -1);
   else if (e.key === "[") strokeStep(-1);
   else if (e.key === "]") strokeStep(1);
   else if (e.key === "g" || e.key === "G") setTool("shape");
