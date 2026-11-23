@@ -8,7 +8,7 @@ import { drawNotes, moveNoteLabel, moveNotePin, type Note, type NoteBox } from "
 import { DEFAULT_OPACITY, ImageStore, clampOpacity, drawRefImages, loadImageFile, normAngle, refImageCorners, refImageLocal, type RefImage } from "./refimages";
 import { ICONS, customImageId, customKind, drawIconAt, drawIcons, hitIcon, isBuiltinIcon, normRot, sanitizeCustomIcons, type CustomIcon, type MapIcon } from "./icons";
 import { DEFAULT_EXPORT, canvasToPng, makeZip, renderExport, type ExportOptions } from "./exportimage";
-import { MAX_TRACE_AREA, traceArea, traceImage, type TraceCell, type TraceOptions } from "./trace";
+import { MAX_TRACE_AREA, SMART_CLASSES, traceArea, traceImage, type SmartClass, type TraceCell, type TraceOptions } from "./trace";
 import { DEFAULT_METERS_PER_CELL, formatLength, getMetersPerCell, scaleText, setMetersPerCell, worldToMeters } from "./units";
 import { PROJECT_FORMAT, PROJECT_VERSION, floorName, parseProject, projectFileName, sanitizeFloors, sanitizeIconLabels, sanitizeLegend, type FloorData, type LegendData, type ProjectFile } from "./project";
 import { DEFAULT_WALL_HEIGHT, ENGINE_ROLES, defaultElevation, guessRole, parseMeters, roleLabel, type EngineRole } from "./engine";
@@ -1582,6 +1582,7 @@ const traceTol = $("trace-tol") as HTMLInputElement;
 const traceThr = $("trace-thr") as HTMLInputElement;
 const traceLineColor = $("trace-line-color") as HTMLSelectElement;
 const traceColorsEl = $("trace-colors");
+const traceClassesEl = $("trace-classes");
 const traceIgnoreBg = $("trace-ignore-bg") as HTMLInputElement;
 const traceDenoise = $("trace-denoise") as HTMLInputElement;
 const traceDark = $("trace-dark") as HTMLInputElement;
@@ -1631,6 +1632,23 @@ function openTrace() {
     traceColorsEl.appendChild(chip);
   }
   traceLineColor.value = (legend.find((e) => e.role === "wall") ?? legend[0])?.color ?? currentColor;
+  // 智能识别：每种地形对应到颜色说明里的哪一项；没有的会在生成时自动添加
+  traceClassesEl.replaceChildren();
+  for (const c of SMART_CLASSES) {
+    const tg = smartTarget(c);
+    const chip = document.createElement("label");
+    chip.className = "trace-chip";
+    chip.title = tg.entry ? t("涂成颜色说明里的「{name}」", { name: t(tg.entry.name) }) : t("颜色说明里还没有，生成时会自动添加");
+    const cb = document.createElement("input");
+    cb.type = "checkbox";
+    cb.checked = true;
+    cb.value = c;
+    cb.addEventListener("change", scheduleTrace);
+    const sw = document.createElement("i");
+    sw.style.background = tg.color;
+    chip.append(cb, sw, document.createTextNode(t(tg.def.name) + (tg.entry ? "" : t("（新）"))));
+    traceClassesEl.appendChild(chip);
+  }
   syncTraceMode();
   tracePanel.hidden = false;
   imagePanel.hidden = true;
@@ -1643,20 +1661,34 @@ function closeTrace() {
   clearTimeout(traceTimer);
   requestRender();
 }
+/** 智能识别的地形对应颜色说明里的哪一项（按类型和名字找），找不到就用默认颜色、生成时添加 */
+function smartTarget(c: SmartClass): { entry?: LegendEntry; def: Omit<LegendEntry, "id">; color: string } {
+  const def = DEFAULT_LEGEND.find((e) => e.key === c)!;
+  const grassy = (e: LegendEntry) => e.key === "grass" || /草|grass/i.test(e.name);
+  const entry = c === "wall" ? legend.find((e) => e.role === "wall")
+    : c === "water" ? legend.find((e) => e.role === "water")
+    : c === "hazard" ? legend.find((e) => e.role === "hazard")
+    : c === "grass" ? legend.find(grassy)
+    : legend.find((e) => e.key === "floor") ?? legend.find((e) => e.role === "floor" && !grassy(e));
+  return { entry, def, color: entry?.color ?? def.color };
+}
 function syncTraceMode() {
   const line = traceMode.value === "line";
-  $("trace-tol-row").hidden = line;
-  $("trace-colors-row").hidden = line;
+  const smart = traceMode.value === "smart";
+  $("trace-tol-row").hidden = line || smart;
+  $("trace-colors-row").hidden = line || smart;
+  $("trace-classes-row").hidden = !smart;
   $("trace-bg-label").hidden = line;
-  $("trace-dark-label").hidden = line;
-  $("trace-thr-row").hidden = !line;
+  $("trace-dark-label").hidden = line || smart;
+  $("trace-thr-row").hidden = !(line || smart);
   $("trace-line-row").hidden = !line;
   $("trace-tol-text").textContent = `${traceTol.value}%`;
   $("trace-thr-text").textContent = `${traceThr.value}%`;
 }
 function traceOptions(): TraceOptions {
   return {
-    mode: traceMode.value === "line" ? "line" : "color",
+    mode: traceMode.value === "line" ? "line" : traceMode.value === "smart" ? "smart" : "color",
+    classes: Object.fromEntries([...traceClassesEl.querySelectorAll<HTMLInputElement>("input:checked")].map((c) => [c.value, smartTarget(c.value as SmartClass).color])),
     k: Number(traceCell.value),
     tolerance: Number(traceTol.value) / 100,
     threshold: Number(traceThr.value) / 100,
@@ -1686,7 +1718,8 @@ async function runTrace() {
   traceApply.disabled = res.tooMany || !res.cells.length;
   traceSummary.textContent = res.tooMany ? t("格子太多，请选大一点的格子")
     : res.cells.length ? t("将生成 {n} 个格子，每格 {size}", { n: res.cells.length.toLocaleString(), size: formatLength(worldToMeters(levelStep(o.k))) })
-    : o.mode === "color" && !o.colors.length ? t("请至少勾选一种颜色") : t("没有匹配的格子，试试调大容差或换一种方式");
+    : o.mode === "color" && !o.colors.length ? t("请至少勾选一种颜色")
+    : o.mode === "smart" ? t("没有识别出地形，试试调整深浅、格子大小或换一种方式") : t("没有匹配的格子，试试调大容差或换一种方式");
   requestRender();
 }
 function drawTracePreview() {
@@ -1716,11 +1749,25 @@ function applyTrace() {
   if (!tracePreview || !tracePreview.cells.length) return;
   const change: Change = new Map();
   const { k, cells } = tracePreview;
+  // 智能识别用到了颜色说明里没有的地形：自动添加对应条目
+  const added: string[] = [];
+  if (traceMode.value === "smart") {
+    const used = new Set(cells.map((c) => c.color));
+    for (const c of SMART_CLASSES) {
+      const tg = smartTarget(c);
+      if (tg.entry || !used.has(tg.color)) continue;
+      const key = legend.some((e) => e.key === tg.def.key) ? newLegendKey() : tg.def.key;
+      legend.push({ ...tg.def, key, id: nextId++ });
+      added.push(t(tg.def.name));
+    }
+    if (added.length) { saveLegend(); renderLegend(); }
+  }
   for (const c of cells) layer.paint(k, c.i, c.j, c.color, change);
   commit(change);
   const n = cells.length;
   closeTrace();
-  toast(t("已生成 {n} 个格子（Ctrl+Z 可撤销）。可以把参考图调淡或隐藏后检查效果", { n: n.toLocaleString() }));
+  toast(t("已生成 {n} 个格子（Ctrl+Z 可撤销）。可以把参考图调淡或隐藏后检查效果", { n: n.toLocaleString() })
+    + (added.length ? t("。") + t("已在颜色说明里添加：{names}", { names: added.join(t("、")) }) : ""));
 }
 $("image-trace").addEventListener("click", openTrace);
 $("trace-cancel").addEventListener("click", closeTrace);

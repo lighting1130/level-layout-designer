@@ -7,7 +7,7 @@ import { refImageBounds, type RefImage } from "./refimages";
  */
 export interface TraceOptions {
   /** color：每格换成最接近的颜色说明颜色；line：深色的地方涂成一种颜色（适合线稿、黑白平面图） */
-  mode: "color" | "line";
+  mode: "color" | "line" | "smart";
   /** 格子层级（和画笔一样，0 是基础格子） */
   k: number;
   /** 颜色匹配的容差 0–1：颜色差得比这更远的格子不涂 */
@@ -23,6 +23,44 @@ export interface TraceOptions {
   darkColor: string | null;
   /** 去掉周围没有同色格子的孤立小点 */
   denoise: boolean;
+  /** 智能识别：每种地形涂成的颜色；没有的地形不涂 */
+  classes?: Partial<Record<SmartClass, string>>;
+}
+
+/** 智能识别出的地形 */
+export type SmartClass = "wall" | "floor" | "grass" | "water" | "hazard";
+export const SMART_CLASSES: SmartClass[] = ["wall", "floor", "grass", "water", "hazard"];
+
+/**
+ * 按颜色的含义判断一个像素是什么地形（不看颜色说明里具体是哪种颜色）：
+ * 深色/灰色 → 墙；蓝色、青色 → 水；绿色 → 草地；鲜艳的红色、橙色 → 岩浆/伤害区；
+ * 米色、棕色、黄色、浅灰等其余颜色 → 地面；接近白色 → 背景（null）。
+ * darkLum：比它暗的无彩色像素算墙
+ */
+export function smartClass(R: number, G: number, B: number, darkLum: number, ignoreBg: boolean): SmartClass | null {
+  const max = Math.max(R, G, B), min = Math.min(R, G, B);
+  const v = max / 255;
+  const lum = (0.299 * R + 0.587 * G + 0.114 * B) / 255;
+  const sat = max ? (max - min) / max : 0;
+  const chroma = (max - min) / 255;
+  if (ignoreBg && lum > 0.86 && chroma < 0.1) return null;
+  // 很暗的颜色不管色相都当墙（黑线、深色描边）
+  if (v < 0.22) return "wall";
+  // 无彩色：深灰算墙，浅灰算地面
+  if (chroma < 0.1 || sat < 0.12) {
+    if (lum < darkLum) return "wall";
+    if (lum < darkLum + 0.2 && chroma < 0.06) return "wall";
+    return ignoreBg && lum > 0.86 ? null : "floor";
+  }
+  let h: number;
+  if (max === R) h = ((G - B) / (max - min)) * 60;
+  else if (max === G) h = ((B - R) / (max - min)) * 60 + 120;
+  else h = ((R - G) / (max - min)) * 60 + 240;
+  h = (h + 360) % 360;
+  if (h >= 170 && h < 265) return sat > 0.18 ? "water" : "floor";
+  if (h >= 70 && h < 170) return sat > 0.15 ? "grass" : "floor";
+  if (h < 40 || h >= 330) return sat > 0.5 && v > 0.5 ? "hazard" : "floor";
+  return "floor";
 }
 
 export interface TraceCell { i: number; j: number; color: string }
@@ -54,7 +92,8 @@ export function traceImage(img: CanvasImageSource, r: RefImage, o: TraceOptions)
   const { s, i0, j0, cols, rows, area } = traceArea(r, o.k);
   if (area > MAX_TRACE_AREA) return { cells: [], tooMany: true, area };
   // 每个格子采 f×f 个像素再取平均
-  const f = Math.max(1, Math.min(o.mode === "line" ? 12 : 6, Math.floor(Math.sqrt((o.mode === "line" ? 4e6 : 2e6) / area))));
+  const fine = o.mode !== "color";
+  const f = Math.max(1, Math.min(fine ? 12 : 6, Math.floor(Math.sqrt((fine ? 4e6 : 2e6) / area))));
   const c = document.createElement("canvas");
   c.width = cols * f;
   c.height = rows * f;
@@ -89,7 +128,30 @@ export function traceImage(img: CanvasImageSource, r: RefImage, o: TraceOptions)
   for (let row = 0; row < rows; row++) {
     for (let col = 0; col < cols; col++) {
       let color: string | null = null;
-      if (o.mode === "line") {
+      if (o.mode === "smart") {
+        // 智能识别：墙线通常很细，占格子 15% 以上就算墙；其余取占比最多的地形（至少 30%）
+        const tally: Record<string, number> = {};
+        let total = 0;
+        for (let y = row * f; y < row * f + f; y++) {
+          for (let x = col * f; x < col * f + f; x++) {
+            const p = (y * W + x) * 4;
+            if (data[p + 3] < 128) continue;
+            total++;
+            const k = smartClass(data[p], data[p + 1], data[p + 2], o.threshold, o.ignoreBg);
+            if (k) tally[k] = (tally[k] ?? 0) + 1;
+          }
+        }
+        const cls = o.classes ?? {};
+        if (cls.wall && (tally.wall ?? 0) >= Math.max(1, 0.15 * total)) color = cls.wall;
+        else {
+          let most = 0;
+          for (const k of SMART_CLASSES) {
+            if (k === "wall" || !cls[k]) continue;
+            if ((tally[k] ?? 0) > most) { most = tally[k]; color = cls[k]!; }
+          }
+          if (most < Math.max(1, 0.3 * total)) color = null;
+        }
+      } else if (o.mode === "line") {
         // 线稿看格子里最暗的一点，细线也不会被白底平均掉
         let minLum = 1;
         for (let y = row * f; y < row * f + f; y++) {
@@ -117,6 +179,23 @@ export function traceImage(img: CanvasImageSource, r: RefImage, o: TraceOptions)
       }
       if (color) grid.set(row * cols + col, color);
     }
+  }
+  if (o.denoise && o.mode === "smart") {
+    // 补洞：空格子周围 8 格里有 6 格以上是同一种地形，就补上（文字、图标留下的小空洞）
+    const add: [number, string][] = [];
+    for (let row = 0; row < rows; row++) {
+      for (let col = 0; col < cols; col++) {
+        if (grid.has(row * cols + col)) continue;
+        const n = new Map<string, number>();
+        for (let dy = -1; dy <= 1; dy++) for (let dx = -1; dx <= 1; dx++) {
+          if (!dx && !dy) continue;
+          const g = grid.get((row + dy) * cols + col + dx);
+          if (g && row + dy >= 0 && row + dy < rows && col + dx >= 0 && col + dx < cols) n.set(g, (n.get(g) ?? 0) + 1);
+        }
+        for (const [g, c] of n) if (c >= 6) { add.push([row * cols + col, g]); break; }
+      }
+    }
+    for (const [key, g] of add) grid.set(key, g);
   }
   const cells: TraceCell[] = [];
   for (const [key, color] of grid) {
