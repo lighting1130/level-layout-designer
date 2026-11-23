@@ -1,0 +1,21 @@
+{
+	"FileVersion": 3,
+	"Version": 1,
+	"VersionName": "0.1.0",
+	"FriendlyName": "Level Layout Importer",
+	"Description": "Imports a Level Layout Designer project file (.json) and generates a same-scale level blockout (whitebox).",
+	"Category": "Level Design",
+	"CreatedBy": "level-layout-designer",
+	"CreatedByURL": "https://github.com/lighting1130/level-layout-designer",
+	"DocsURL": "https://github.com/lighting1130/level-layout-designer/tree/main/engine/unreal/LevelLayoutImporter",
+	"EngineVersion": "5.8.0",
+	"CanContainContent": false,
+	"IsBetaVersion": true,
+	"Modules": [
+		{
+			"Name": "LevelLayoutImporter",
+			"Type": "Editor",
+			"LoadingPhase": "PostEngineInit"
+		}
+	]
+}
