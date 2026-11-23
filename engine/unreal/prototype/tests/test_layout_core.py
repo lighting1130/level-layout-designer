@@ -164,5 +164,27 @@ class Sample(unittest.TestCase):
         self.assertLess(len([b for b in p.boxes if b.source == "cell"]), 60)
 
 
+class Version5(unittest.TestCase):
+    def test_legend_role_and_height(self):
+        pr = lc.normalize_project({"format": lc.FORMAT, "version": 5, "legend": [
+            {"id": "low", "name": "矮墙", "color": "#111111", "role": "wall", "height": 1.2},
+            {"id": "x", "name": "墙体", "color": "#222222", "role": "floor"}],
+            "floors": [{"level": 1, "wallHeight": 3, "elevation": 2, "cells": [
+                {"k": 0, "i": 0, "j": 0, "color": "#111111"}, {"k": 0, "i": 2, "j": 0, "color": "#222222"}]}]})
+        boxes = {b.color: b for b in lc.build_plan(pr).boxes}
+        low = boxes["#111111"]
+        self.assertEqual(low.role, "wall")
+        self.assertAlmostEqual(low.size[2], 120.0)
+        self.assertAlmostEqual(low.center[2], 200.0 + 60.0)  # 标高 2 m
+        self.assertEqual(boxes["#222222"].role, "floor")  # role 优先于名字
+
+    def test_icon_rot(self):
+        pr = lc.normalize_project({"format": lc.FORMAT, "version": 5, "floors": [{"level": 1, "icons": [
+            {"kind": "spawn", "x": 0, "y": 0, "size": 32, "rot": 270}, {"kind": "chest", "x": 0, "y": 0, "size": 32}]}]})
+        m = lc.build_plan(pr).markers
+        self.assertEqual(m[0].yaw, 270.0)
+        self.assertEqual(m[1].yaw, 0.0)
+
+
 if __name__ == "__main__":
     unittest.main()

@@ -4,6 +4,7 @@ import { sanitizeVectors, type VectorShape } from "./vectors";
 import { sanitizeNotes, type Note } from "./notes";
 import { sanitizeCustomIcons, sanitizeIcons, type CustomIcon, type MapIcon } from "./icons";
 import { isImageDataUrl, sanitizeRefImages, type RefImage } from "./refimages";
+import { guessRole, isEngineRole, parseMeters, type EngineRole } from "./engine";
 
 /** 工程文件格式（.json）。字段说明见 docs/project-file-format.md */
 export const PROJECT_FORMAT = "level-layout-designer";
@@ -11,9 +12,23 @@ export const PROJECT_FORMAT = "level-layout-designer";
  * 版本 3：内容按楼层保存在 floors 中。
  * 版本 4：新增参考图（顶层 images 存图片数据，floors[].images 存位置）、
  *         关卡图标（floors[].icons）和自定义图标库（customIcons）。
+ * 版本 5：给游戏引擎导入用的信息——legend 加 id / role / height，楼层加 elevation / wallHeight，
+ *         图标加 rot（朝向）。都是可选字段，旧版本文件照常导入。
  * 版本 1/2 的文件（顶层 cells / vectors）导入时视为“第一层”。
  */
-export const PROJECT_VERSION = 4;
+export const PROJECT_VERSION = 5;
+
+/** 颜色说明的一项 */
+export interface LegendData {
+  /** 稳定的 id（版本 5），改名改色都不变 */
+  id?: string;
+  name: string;
+  color: string;
+  /** 在游戏引擎里生成成什么（版本 5）；旧文件按名字猜 */
+  role?: EngineRole;
+  /** 这种颜色的墙/块的高度（米，版本 5，可选），不写用楼层墙高 */
+  height?: number;
+}
 
 export interface FloorData {
   /** 楼层号：1 = 第一层，2 = 第二层，-1 = 负一层……没有 0 */
@@ -26,6 +41,10 @@ export interface FloorData {
   images: RefImage[];
   /** 关卡图标（可选，旧文件没有） */
   icons: MapIcon[];
+  /** 这一层地面的标高（米，版本 5，可选），不写按默认层高推算 */
+  elevation?: number;
+  /** 这一层的墙高（米，版本 5，可选） */
+  wallHeight?: number;
 }
 
 export interface ProjectFile {
@@ -35,7 +54,7 @@ export interface ProjectFile {
   exportedAt: string;
   grid: { cellSize: number; subdivision: number };
   view: { x: number; y: number; zoom: number };
-  legend: { name: string; color: string }[];
+  legend: LegendData[];
   currentFloor: number;
   floors: FloorData[];
   /** 参考图数据：id -> data URL */
@@ -74,7 +93,12 @@ export function sanitizeFloors(list: unknown, knownImage?: (id: string) => boole
     for (const f of list as any[]) {
       if (!f || !Number.isInteger(f.level) || f.level === 0 || seen.has(f.level)) continue;
       seen.add(f.level);
-      out.push({ level: f.level, cells: sanitizeCells(f.cells), vectors: sanitizeVectors(f.vectors), notes: sanitizeNotes(f.notes), images: sanitizeRefImages(f.images, knownImage), icons: sanitizeIcons(f.icons, knownImage) });
+      const elevation = parseMeters(f.elevation, true), wallHeight = parseMeters(f.wallHeight, false);
+      out.push({
+        level: f.level, cells: sanitizeCells(f.cells), vectors: sanitizeVectors(f.vectors), notes: sanitizeNotes(f.notes),
+        images: sanitizeRefImages(f.images, knownImage), icons: sanitizeIcons(f.icons, knownImage),
+        ...(elevation !== undefined ? { elevation } : {}), ...(wallHeight !== undefined ? { wallHeight } : {}),
+      });
     }
   }
   if (!out.length) out.push({ level: 1, cells: [], vectors: [], notes: [], images: [], icons: [] });
@@ -93,10 +117,7 @@ export function parseProject(text: string): ProjectFile {
   if (typeof data.version !== "number" || data.version > PROJECT_VERSION) {
     throw new Error(t("工程文件版本比当前工具新，请使用新版工具打开。"));
   }
-  const legend = Array.isArray(data.legend)
-    ? data.legend.filter((e: any) => e && typeof e.name === "string" && HEX.test(e.color))
-        .map((e: any) => ({ name: e.name, color: e.color.toLowerCase() }))
-    : [];
+  const legend = sanitizeLegend(data.legend);
   const v = data.view;
   const view = v && [v.x, v.y, v.zoom].every((n) => typeof n === "number" && isFinite(n)) && v.zoom > 0
     ? { x: v.x, y: v.y, zoom: v.zoom }
@@ -125,6 +146,24 @@ export function parseProject(text: string): ProjectFile {
     iconLabels: sanitizeIconLabels(data.iconLabels),
     ...(typeof data.metersPerCell === "number" && isFinite(data.metersPerCell) && data.metersPerCell > 0 ? { metersPerCell: data.metersPerCell } : {}),
   };
+}
+
+/** 校验颜色说明；没有 role 的按名字猜，没有 id 的留空（由界面补上） */
+export function sanitizeLegend(list: unknown): LegendData[] {
+  if (!Array.isArray(list)) return [];
+  const seen = new Set<string>();
+  return list.filter((e: any) => e && typeof e.name === "string" && typeof e.color === "string" && HEX.test(e.color)).map((e: any) => {
+    const id = typeof e.id === "string" && e.id && e.id.length <= 64 && !seen.has(e.id) ? e.id : undefined;
+    if (id) seen.add(id);
+    const height = parseMeters(e.height, false);
+    return {
+      ...(id ? { id } : {}),
+      name: e.name,
+      color: e.color.toLowerCase(),
+      role: isEngineRole(e.role) ? e.role : guessRole(e.name),
+      ...(height !== undefined ? { height } : {}),
+    };
+  });
 }
 
 /** 楼层显示名：1 → 第一层，-1 → 负一层 */

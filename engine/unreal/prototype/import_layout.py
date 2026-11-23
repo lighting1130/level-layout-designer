@@ -174,14 +174,14 @@ class Importer:
     def spawn_marker(self, m, index):
         loc = unreal.Vector(*m.location)
         if m.actor == "player_start":
-            a = self.actors.spawn_actor_from_class(unreal.PlayerStart, loc + unreal.Vector(0, 0, 100), unreal.Rotator())
+            a = self.actors.spawn_actor_from_class(unreal.PlayerStart, loc + unreal.Vector(0, 0, 100), unreal.Rotator(roll=0.0, pitch=0.0, yaw=m.yaw))
             return self.place(a, m.floor, f"PlayerStart_{index:03d}")
         if m.actor == "camera":
-            a = self.actors.spawn_actor_from_class(unreal.CameraActor, loc + unreal.Vector(0, 0, 300), unreal.Rotator(roll=0.0, pitch=-30.0, yaw=0.0))
+            a = self.actors.spawn_actor_from_class(unreal.CameraActor, loc + unreal.Vector(0, 0, 300), unreal.Rotator(roll=0.0, pitch=-30.0, yaw=m.yaw))
             return self.place(a, m.floor, f"Camera_{index:03d}")
         # 占位：小圆柱 + 名字
         size = max(30.0, min(m.size_cm, 150.0))
-        a = self.actors.spawn_actor_from_class(unreal.StaticMeshActor, loc + unreal.Vector(0, 0, size / 2), unreal.Rotator())
+        a = self.actors.spawn_actor_from_class(unreal.StaticMeshActor, loc + unreal.Vector(0, 0, size / 2), unreal.Rotator(roll=0.0, pitch=0.0, yaw=m.yaw))
         comp = a.get_editor_property("static_mesh_component")
         comp.set_static_mesh(self.cylinder)
         comp.set_collision_profile_name("NoCollision")

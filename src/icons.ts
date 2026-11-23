@@ -1,4 +1,5 @@
 import type { Camera } from "./camera";
+import { ORIENTED_ICONS } from "./engine";
 
 /**
  * 关卡图标：楼梯、宝箱、陷阱、记录点……
@@ -64,6 +65,8 @@ export interface MapIcon {
   y: number;
   /** 边长（世界单位） */
   size: number;
+  /** 朝向（版本 5，可选）：顺时针角度，0 = 朝右（UE 的 +X）。框选旋转时按 90° 改变 */
+  rot?: number;
 }
 
 export function sanitizeIcons(list: unknown, knownImage?: (id: string) => boolean): MapIcon[] {
@@ -76,7 +79,16 @@ export function sanitizeIcons(list: unknown, knownImage?: (id: string) => boolea
   };
   return list
     .filter((n: any) => n && ok(n.kind) && [n.x, n.y, n.size].every((v) => typeof v === "number" && isFinite(v)) && n.size > 0)
-    .map((n: any) => ({ kind: n.kind, x: n.x, y: n.y, size: n.size }));
+    .map((n: any) => {
+      const rot = typeof n.rot === "number" && isFinite(n.rot) ? normRot(n.rot) : 0;
+      return { kind: n.kind, x: n.x, y: n.y, size: n.size, ...(rot ? { rot } : {}) };
+    });
+}
+
+/** 角度规范到 [0, 360)，保留一位小数 */
+export function normRot(deg: number) {
+  const r = Math.round((((deg % 360) + 360) % 360) * 10) / 10;
+  return r >= 360 ? 0 : r;
 }
 
 const paths = new Map<string, Path2D>();
@@ -147,8 +159,26 @@ export function drawIcons(ctx: CanvasRenderingContext2D, cam: Camera, list: MapI
     const px = ic.size * cam.zoom;
     if (p.x + px < 0 || p.y + px < 0 || p.x - px > ctx.canvas.width || p.y - px > ctx.canvas.height) continue;
     drawIconAt(ctx, ic.kind, p.x, p.y, px, highlight?.has(ic), getImage);
+    if (px >= 10 && (ic.rot || ORIENTED_ICONS.has(ic.kind))) drawFacing(ctx, p.x, p.y, px, ic.rot ?? 0);
   }
   ctx.restore();
+}
+
+/** 在图标外侧画一个小三角，表示朝向（rot 顺时针角度，0 = 朝右） */
+function drawFacing(ctx: CanvasRenderingContext2D, cx: number, cy: number, px: number, rot: number) {
+  const a = (rot * Math.PI) / 180;
+  const ux = Math.cos(a), uy = Math.sin(a);
+  const r0 = px * 0.56, r1 = px * 0.56 + Math.max(4, px * 0.22), w = Math.max(3, px * 0.14);
+  ctx.beginPath();
+  ctx.moveTo(cx + ux * r1, cy + uy * r1);
+  ctx.lineTo(cx + ux * r0 - uy * w, cy + uy * r0 + ux * w);
+  ctx.lineTo(cx + ux * r0 + uy * w, cy + uy * r0 - ux * w);
+  ctx.closePath();
+  ctx.fillStyle = "#ffffff";
+  ctx.fill();
+  ctx.lineWidth = 1;
+  ctx.strokeStyle = "rgba(0,0,0,0.6)";
+  ctx.stroke();
 }
 
 /** 世界坐标点是否落在图标上 */

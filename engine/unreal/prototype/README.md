@@ -54,6 +54,8 @@ TextRender 的默认字体没有中文字形。不写 `--font` 时，如果备�
 - 字体是用你电脑上的系统字体生成的，只存在你的 UE 项目里；本仓库不包含任何字体文件。
 - 生成失败（比如系统里没有这些字体）时打印警告，文字退回默认字体（中文显示成方框），导入照常完成。可以用 `--font` 指定自己做好的 Offline 字体。
 
+工程文件 version 5 的引擎字段会被直接使用：颜色说明的 `role`（优先于按名字猜）和 `height`（矮墙等），楼层的 `elevation` / `wallHeight`，图标的 `rot`（PlayerStart、镜头和占位的朝向）。
+
 比例：`UE 厘米 = 世界坐标 ÷ 32 × 每格米数 × 100`。网页 x/y 直接对应 UE X/Y，不镜像。
 
 所有 Actor 放在 Outliner 的 `LevelLayout/<工程名>/<楼层>` 文件夹，带标签 `LevelLayout:<工程名>`；颜色材质实例在 `/Game/LevelLayoutPrototype/<工程名>/`。

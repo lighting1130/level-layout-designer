@@ -73,6 +73,7 @@ class Marker:
     floor: int
     location: tuple[float, float, float]
     size_cm: float
+    yaw: float = 0.0  # 朝向（v5 的 icons[].rot：顺时针角度，0 = +X，和 UE 的 Yaw 一致）
 
 
 @dataclass
@@ -275,10 +276,11 @@ def build_plan(project: dict, s: Settings | None = None) -> Plan:
         plan.floor_z[lv] = z0
         wall_h = float(f.get("wallHeight") or s.wall_height_m) * 100.0
 
-        def slab(role):
+        def slab(role, color=None):
             """(底部 z, 高度) 厘米"""
             if role == "wall":
-                return z0, wall_h
+                h = (legend_by_color.get(color) or {}).get("height")  # v5：这种颜色自己的高度（矮墙等）
+                return z0, (float(h) * 100.0 if isinstance(h, (int, float)) and h > 0 else wall_h)
             if role in ("water", "hazard"):
                 t = s.floor_thickness_m * 100.0
                 return z0 - s.liquid_depth_m * 100.0 - t, t
@@ -297,7 +299,7 @@ def build_plan(project: dict, s: Settings | None = None) -> Plan:
             if role in ("marker", "none"):
                 continue
             step = CELL_SIZE * SUBDIVISION ** k * w2cm
-            zb, h = slab(role)
+            zb, h = slab(role, color)
             for (i0, j0, w, hh) in greedy_rects(cells):
                 plan.boxes.append(Box(role, color, lv,
                                       ((i0 + w / 2) * step, (j0 + hh / 2) * step, zb + h / 2),
@@ -312,7 +314,7 @@ def build_plan(project: dict, s: Settings | None = None) -> Plan:
                 continue
             if color not in legend_by_color:
                 unknown_colors.add(color)
-            zb, h = slab(role)
+            zb, h = slab(role, color)
             boxes = vector_boxes(v, w2cm, s)
             if boxes is None:
                 skipped += 1
@@ -332,7 +334,8 @@ def build_plan(project: dict, s: Settings | None = None) -> Plan:
             label = labels.get(kind) or (custom.get(kind[2:]) if kind.startswith("u:") else None) or kind
             plan.markers.append(Marker(kind, ICON_ACTORS.get(kind, "placeholder"), str(label), lv,
                                        (ic["x"] * w2cm, ic["y"] * w2cm, z0),
-                                       float(ic.get("size") or CELL_SIZE) * w2cm))
+                                       float(ic.get("size") or CELL_SIZE) * w2cm,
+                                       float(ic["rot"]) % 360 if isinstance(ic.get("rot"), (int, float)) else 0.0))
 
         # 备注
         for n in f.get("notes") or []:

@@ -53,6 +53,10 @@
       <div id="floor-list" class="floor-list"></div>
       <button id="floor-add-down" class="floor-add" title="在最下面加一层（地下层）">+ 下加一层</button>
       <button id="floor-del" class="floor-del" title="删除当前楼层（不可撤销）">删除当前层</button>
+      <div class="floor-engine" title="导入游戏引擎（UE 插件）时这一层的高度，留空用灰色的默认值">
+        <label for="floor-elev">标高</label><input id="floor-elev" type="number" step="0.1" aria-label="当前层标高（米）" /><span>m</span>
+        <label for="floor-wall">墙高</label><input id="floor-wall" type="number" step="0.1" min="0.01" aria-label="当前层墙高（米）" /><span>m</span>
+      </div>
     </section>
     <div class="tool-options" id="tool-options" hidden>
       <div id="shape-options" class="opt-row" hidden>
@@ -109,7 +113,7 @@
     </div>
     <div class="tool-options image-options" id="select-options" hidden>
       <div class="opt-row"><strong>选区</strong><span class="opt-tip">拖动移动 · R 旋转</span></div>
-      <div class="opt-row" title="把选中内容旋转 90°（R 顺时针，Shift+R 逆时针）。图标和备注文字保持正向">
+      <div class="opt-row" title="把选中内容旋转 90°（R 顺时针，Shift+R 逆时针）。图标和备注文字保持正向，图标的朝向箭头跟着转">
         <span class="opt-label">旋转</span>
         <button id="sel-rot-ccw">↺ 90°</button>
         <button id="sel-rot-cw">↻ 90°</button>

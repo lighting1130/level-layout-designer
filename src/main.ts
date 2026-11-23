@@ -6,10 +6,11 @@ import { ARROW_LABELS, arrowHeads, isArrowMode, type ArrowMode, MAX_SHAPE_CELLS,
 import { drawVector, drawVectors, hitVector, isClosed, moveVector, rotQuarter, rotateVector, vectorBounds, sanitizeVectors, type VectorShape } from "./vectors";
 import { drawNotes, moveNoteLabel, moveNotePin, type Note, type NoteBox } from "./notes";
 import { DEFAULT_OPACITY, ImageStore, clampOpacity, drawRefImages, loadImageFile, normAngle, refImageCorners, refImageLocal, type RefImage } from "./refimages";
-import { ICONS, customImageId, customKind, drawIconAt, drawIcons, hitIcon, isBuiltinIcon, sanitizeCustomIcons, type CustomIcon, type MapIcon } from "./icons";
+import { ICONS, customImageId, customKind, drawIconAt, drawIcons, hitIcon, isBuiltinIcon, normRot, sanitizeCustomIcons, type CustomIcon, type MapIcon } from "./icons";
 import { DEFAULT_EXPORT, canvasToPng, makeZip, renderExport, type ExportOptions } from "./exportimage";
 import { DEFAULT_METERS_PER_CELL, formatLength, getMetersPerCell, scaleText, setMetersPerCell, worldToMeters } from "./units";
-import { PROJECT_FORMAT, PROJECT_VERSION, floorName, parseProject, projectFileName, sanitizeFloors, sanitizeIconLabels, type FloorData, type ProjectFile } from "./project";
+import { PROJECT_FORMAT, PROJECT_VERSION, floorName, parseProject, projectFileName, sanitizeFloors, sanitizeIconLabels, sanitizeLegend, type FloorData, type LegendData, type ProjectFile } from "./project";
+import { DEFAULT_WALL_HEIGHT, ENGINE_ROLES, defaultElevation, guessRole, parseMeters, roleLabel, type EngineRole } from "./engine";
 
 // 先记下页面里写死的中文，之后切换语言时替换（必须在动态生成内容之前）
 captureStatic(document.body);
@@ -32,31 +33,44 @@ let dirty = true;
 const requestRender = () => { dirty = true; };
 
 // ---------------- 颜色说明（右侧面板，可编辑） ----------------
-interface LegendEntry { id: number; name: string; color: string }
+/**
+ * id：界面内部用的序号；key：存进工程文件的稳定 id（版本 5）；
+ * role / height：导入游戏引擎时生成成什么、多高（版本 5）
+ */
+interface LegendEntry { id: number; key: string; name: string; color: string; role: EngineRole; height?: number }
 /** 默认按关卡元素命名，用户可以改名、改色、增删；按 1-9 快速切换前 9 个 */
 const DEFAULT_LEGEND: Omit<LegendEntry, "id">[] = [
-  { name: "墙体", color: "#8b93a3" },
-  { name: "地面", color: "#c9b48a" },
-  { name: "草地", color: "#5fa45a" },
-  { name: "水域", color: "#3f8fd8" },
-  { name: "岩浆/伤害区", color: "#e0613f" },
-  { name: "出生点", color: "#f2c14e" },
-  { name: "终点/目标", color: "#b07ad9" },
-  { name: "敌人", color: "#d9455f" },
-  { name: "道具/机关", color: "#4fc1b5" },
+  { key: "wall", name: "墙体", color: "#8b93a3", role: "wall" },
+  { key: "floor", name: "地面", color: "#c9b48a", role: "floor" },
+  { key: "grass", name: "草地", color: "#5fa45a", role: "floor" },
+  { key: "water", name: "水域", color: "#3f8fd8", role: "water" },
+  { key: "hazard", name: "岩浆/伤害区", color: "#e0613f", role: "hazard" },
+  { key: "spawn", name: "出生点", color: "#f2c14e", role: "marker" },
+  { key: "goal", name: "终点/目标", color: "#b07ad9", role: "marker" },
+  { key: "enemy", name: "敌人", color: "#d9455f", role: "marker" },
+  { key: "item", name: "道具/机关", color: "#4fc1b5", role: "marker" },
 ];
 const LEGEND_KEY = "level-layout-designer.legend.v1";
 let nextId = 1;
+const newLegendKey = () => "c" + Date.now().toString(36) + Math.random().toString(36).slice(2, 6);
+/** 把工程文件或本地保存的颜色说明变成界面用的列表，补上缺的 key */
+function toLegendEntries(list: LegendData[]): LegendEntry[] {
+  const used = new Set<string>();
+  return list.map((e) => {
+    let key = e.id && !used.has(e.id) ? e.id : newLegendKey();
+    while (used.has(key)) key = newLegendKey();
+    used.add(key);
+    return { id: nextId++, key, name: e.name, color: e.color, role: e.role ?? guessRole(e.name), ...(e.height !== undefined ? { height: e.height } : {}) };
+  });
+}
 let legend: LegendEntry[] = DEFAULT_LEGEND.map((e) => ({ ...e, id: nextId++ }));
 try {
   const raw = localStorage.getItem(LEGEND_KEY);
-  const saved = raw ? JSON.parse(raw) : null;
-  if (Array.isArray(saved) && saved.length) {
-    legend = saved
-      .filter((e) => e && typeof e.name === "string" && /^#[0-9a-f]{6}$/i.test(e.color))
-      .map((e) => ({ id: nextId++, name: e.name, color: e.color.toLowerCase() }));
-  }
+  const saved = raw ? sanitizeLegend(JSON.parse(raw)) : [];
+  if (saved.length) legend = toLegendEntries(saved);
 } catch { /* 忽略 */ }
+/** 存进本地和工程文件的形式 */
+const legendData = (): LegendData[] => legend.map(({ key, name, color, role, height }) => ({ id: key, name, color, role, ...(height !== undefined ? { height } : {}) }));
 let selectedId = legend[0]?.id ?? 0;
 let currentColor = legend[0]?.color ?? "#8b93a3";
 
@@ -64,7 +78,7 @@ const legendList = $("legend-list");
 const legendPanel = $("legend");
 
 function saveLegend() {
-  try { localStorage.setItem(LEGEND_KEY, JSON.stringify(legend.map(({ name, color }) => ({ name, color })))); } catch { /* 忽略 */ }
+  try { localStorage.setItem(LEGEND_KEY, JSON.stringify(legendData())); } catch { /* 忽略 */ }
 }
 
 function selectEntry(id: number) {
@@ -154,7 +168,48 @@ function renderLegend() {
       renderLegend();
     });
 
-    row.append(sw, name, key, del);
+    // 第二行：在游戏引擎里生成成什么（版本 5），墙可以单独设高度
+    const engine = document.createElement("div");
+    engine.className = "legend-engine";
+    engine.addEventListener("pointerdown", (ev) => ev.stopPropagation());
+    const role = document.createElement("select");
+    role.className = "legend-role";
+    role.id = `legend-role-${e.id}`;
+    role.title = t("导入游戏引擎（UE 插件）时，这种颜色生成成什么");
+    role.setAttribute("aria-label", t("{name} 在引擎里是", { name: t(e.name) }));
+    for (const r of ENGINE_ROLES) {
+      const o = document.createElement("option");
+      o.value = r;
+      o.textContent = roleLabel(r);
+      role.appendChild(o);
+    }
+    role.value = e.role;
+    const height = document.createElement("input");
+    height.type = "number";
+    height.className = "legend-height";
+    height.id = `legend-height-${e.id}`;
+    height.min = "0.01";
+    height.step = "0.1";
+    height.placeholder = t("层墙高");
+    height.title = t("这种颜色的高度（米）。留空 = 用楼层的墙高");
+    height.setAttribute("aria-label", t("{name} 的高度（米）", { name: t(e.name) }));
+    height.value = e.height !== undefined ? String(e.height) : "";
+    const unit = document.createElement("span");
+    unit.className = "legend-unit";
+    unit.textContent = "m";
+    const syncHeight = () => { height.hidden = unit.hidden = e.role !== "wall"; };
+    syncHeight();
+    role.addEventListener("change", () => { e.role = role.value as EngineRole; syncHeight(); saveLegend(); });
+    height.addEventListener("change", () => {
+      const v = parseMeters(height.value, false);
+      if (v === undefined) delete e.height; else e.height = v;
+      height.value = e.height !== undefined ? String(e.height) : "";
+      saveLegend();
+    });
+    height.addEventListener("keydown", (ev) => { if (ev.key === "Enter" || ev.key === "Escape") height.blur(); });
+    engine.append(role, height, unit);
+
+    row.append(sw, name, key, del, engine);
     legendList.appendChild(row);
   });
 }
@@ -163,7 +218,7 @@ $("legend-add").addEventListener("click", () => {
   // 新颜色取一个色相与现有颜色尽量不同的颜色
   const hue = (legend.length * 137.5) % 360;
   const color = hslToHex(hue, 55, 60);
-  const e = { id: nextId++, name: t("新颜色 {n}", { n: legend.length + 1 }), color };
+  const e: LegendEntry = { id: nextId++, key: newLegendKey(), name: t("新颜色 {n}", { n: legend.length + 1 }), color, role: "floor" };
   legend.push(e);
   saveLegend();
   renderLegend();
@@ -346,7 +401,8 @@ let imgDrag: { img: RefImage; kind: "move" | "resize" | "rotate"; start: Pt; sta
 let icons: MapIcon[] = [];
 /** 用户导入的图标库（所有楼层共用） */
 let customIcons: CustomIcon[] = [];
-interface Floor { level: number; layer: CellLayer; vectors: VectorShape[]; notes: Note[]; images: RefImage[]; icons: MapIcon[] }
+/** elevation / wallHeight：导入游戏引擎用的标高和墙高（米，版本 5），不设置时用默认值 */
+interface Floor { level: number; layer: CellLayer; vectors: VectorShape[]; notes: Note[]; images: RefImage[]; icons: MapIcon[]; elevation?: number; wallHeight?: number }
 /** 按楼层号从高到低排列 */
 let floors: Floor[] = [{ level: 1, layer, vectors, notes, images, icons }];
 let currentLevel = 1;
@@ -447,10 +503,33 @@ function renderFloors() {
   }
   // 楼层多时列表会滚动，保证当前层看得见
   floorList.querySelector<HTMLElement>('[aria-pressed="true"]')?.scrollIntoView({ block: "nearest" });
+  syncFloorEngine();
   const del = $("floor-del") as HTMLButtonElement;
   del.disabled = floors.length <= 1;
   if (!deleteArmed) { del.textContent = t("删除当前层"); del.classList.remove("danger"); }
 }
+// 当前楼层在游戏引擎里的标高和墙高（版本 5），留空 = 默认
+const floorElev = $("floor-elev") as HTMLInputElement;
+const floorWall = $("floor-wall") as HTMLInputElement;
+function syncFloorEngine() {
+  const f = currentFloor();
+  if (document.activeElement !== floorElev) floorElev.value = f.elevation !== undefined ? String(f.elevation) : "";
+  if (document.activeElement !== floorWall) floorWall.value = f.wallHeight !== undefined ? String(f.wallHeight) : "";
+  floorElev.placeholder = String(defaultElevation(f.level));
+  floorWall.placeholder = String(DEFAULT_WALL_HEIGHT);
+}
+function bindFloorMeters(input: HTMLInputElement, field: "elevation" | "wallHeight") {
+  input.addEventListener("change", () => {
+    const f = currentFloor();
+    const v = parseMeters(input.value, field === "elevation");
+    if (v === undefined) delete f[field]; else f[field] = v;
+    input.value = f[field] !== undefined ? String(f[field]) : "";
+    save();
+  });
+  input.addEventListener("keydown", (ev) => { if (ev.key === "Enter" || ev.key === "Escape") input.blur(); });
+}
+bindFloorMeters(floorElev, "elevation");
+bindFloorMeters(floorWall, "wallHeight");
 $("floor-add-up").addEventListener("click", () => addFloor(1));
 $("floor-add-down").addEventListener("click", () => addFloor(-1));
 $("floor-del").addEventListener("click", (e) => deleteCurrentFloor(e.currentTarget as HTMLButtonElement));
@@ -526,13 +605,16 @@ const VECTOR_KEY = "level-layout-designer.vectors.v1";
 const FLOORS_KEY = "level-layout-designer.floors.v1";
 function floorData(): FloorData[] {
   syncFloor();
-  return floors.map((f) => ({ level: f.level, cells: f.layer.toJSON(), vectors: f.vectors, notes: f.notes, images: f.images, icons: f.icons }));
+  return floors.map((f) => ({
+    level: f.level, cells: f.layer.toJSON(), vectors: f.vectors, notes: f.notes, images: f.images, icons: f.icons,
+    ...(f.elevation !== undefined ? { elevation: f.elevation } : {}), ...(f.wallHeight !== undefined ? { wallHeight: f.wallHeight } : {}),
+  }));
 }
 function loadFloors(data: FloorData[], current: number) {
   floors = sanitizeFloors(data, (id) => imageStore.has(id)).map((f) => {
     const l = new CellLayer();
     l.load(f.cells);
-    return { level: f.level, layer: l, vectors: f.vectors, notes: f.notes, images: f.images, icons: f.icons };
+    return { level: f.level, layer: l, vectors: f.vectors, notes: f.notes, images: f.images, icons: f.icons, elevation: f.elevation, wallHeight: f.wallHeight };
   });
   const cur = floors.find((f) => f.level === current) ?? floors.find((f) => f.level === 1) ?? floors[0];
   currentLevel = cur.level;
@@ -1753,7 +1835,7 @@ function moveSelection(dx: number, dy: number) {
 
 /**
  * 把选区绕中心顺时针旋转 q 个 90°（q 为负则逆时针），可撤销。
- * 旋转中心对齐到格子，保证格子转完仍然落在格子上；图标和备注文字保持正向，只转位置。
+ * 旋转中心对齐到格子，保证格子转完仍然落在格子上；图标和备注文字保持正向，只转位置（图标的朝向 rot 跟着转）。
  */
 function rotateSelection(q: number) {
   if (!selection) return;
@@ -1800,7 +1882,13 @@ function rotateSelection(q: number) {
   if (ics.length) {
     iconsBefore = icons;
     const set = new Set(ics);
-    ics = ics.map((ic) => ({ ...ic, ...R(ic) }));
+    // 图标画面保持正向，只转位置；朝向（rot，导入引擎用）跟着转
+    ics = ics.map((ic) => {
+      const rot = normRot((ic.rot ?? 0) + 90 * q);
+      const next: MapIcon = { ...ic, ...R(ic), rot };
+      if (!rot) delete next.rot;
+      return next;
+    });
     icons = icons.filter((ic) => !set.has(ic)).concat(ics);
   }
   commit(change, before, notesBefore, undefined, iconsBefore);
@@ -2218,7 +2306,7 @@ function buildProject(): ProjectFile {
     exportedAt: new Date().toISOString(),
     grid: { cellSize: CELL_SIZE, subdivision: SUBDIVISION },
     view: { x: cam.x + width / 2 / cam.zoom, y: cam.y + height / 2 / cam.zoom, zoom: cam.zoom },
-    legend: legend.map(({ name, color }) => ({ name, color })),
+    legend: legendData(),
     currentFloor: currentLevel,
     floors: floorData(),
     images: Object.fromEntries([...liveImageIds()].filter((id) => imageStore.has(id)).map((id) => [id, imageStore.srcs.get(id)!])),
@@ -2385,7 +2473,7 @@ function loadProject(p: ProjectFile) {
   loadFloors(p.floors, p.currentFloor);
   renderFloors();
   if (p.legend.length) {
-    legend = p.legend.map((e) => ({ ...e, id: nextId++ }));
+    legend = toLegendEntries(p.legend);
     saveLegend();
     renderLegend();
     selectEntry(legend[0].id);
