@@ -8,6 +8,7 @@ import { drawNotes, moveNoteLabel, moveNotePin, type Note, type NoteBox } from "
 import { DEFAULT_OPACITY, ImageStore, clampOpacity, drawRefImages, loadImageFile, normAngle, refImageCorners, refImageLocal, type RefImage } from "./refimages";
 import { ICONS, customImageId, customKind, drawIconAt, drawIcons, hitIcon, isBuiltinIcon, normRot, sanitizeCustomIcons, type CustomIcon, type MapIcon } from "./icons";
 import { DEFAULT_EXPORT, canvasToPng, makeZip, renderExport, type ExportOptions } from "./exportimage";
+import { MAX_TRACE_AREA, traceArea, traceImage, type TraceCell, type TraceOptions } from "./trace";
 import { DEFAULT_METERS_PER_CELL, formatLength, getMetersPerCell, scaleText, setMetersPerCell, worldToMeters } from "./units";
 import { PROJECT_FORMAT, PROJECT_VERSION, floorName, parseProject, projectFileName, sanitizeFloors, sanitizeIconLabels, sanitizeLegend, type FloorData, type LegendData, type ProjectFile } from "./project";
 import { DEFAULT_WALL_HEIGHT, ENGINE_ROLES, defaultElevation, guessRole, parseMeters, roleLabel, type EngineRole } from "./engine";
@@ -823,6 +824,7 @@ function frame() {
       hl = new Set([...(hl ?? []), ghost]);
     }
     noteBoxes = drawNotes(ctx, cam, shown, 1, hl);
+    drawTracePreview();
     drawSelection();
     drawImageSelection();
     drawHover();
@@ -1490,7 +1492,8 @@ const imageLock = $("image-lock") as HTMLInputElement;
 /** 拖动透明度滑块时先实时预览，松手时整体记一步撤销 */
 let opacityBefore: RefImage[] | null = null;
 function syncImagePanel() {
-  const show = !!imgSel && tool === "select";
+  if (traceTarget && (!images.includes(traceTarget) || tool !== "select")) closeTrace();
+  const show = !!imgSel && tool === "select" && !traceTarget;
   imagePanel.hidden = !show;
   if (!show || !imgSel) return;
   const pct = Math.round(imgSel.opacity * 100);
@@ -1539,6 +1542,160 @@ $("image-front").addEventListener("click", () => {
   images = [...images.filter((r) => r !== cur), cur];
   commit(new Map(), undefined, undefined, before);
 });
+
+// ---------------- 从参考图生成 layout ----------------
+const tracePanel = $("trace-options");
+const traceMode = $("trace-mode") as HTMLSelectElement;
+const traceCell = $("trace-cell") as HTMLSelectElement;
+const traceTol = $("trace-tol") as HTMLInputElement;
+const traceThr = $("trace-thr") as HTMLInputElement;
+const traceLineColor = $("trace-line-color") as HTMLSelectElement;
+const traceColorsEl = $("trace-colors");
+const traceIgnoreBg = $("trace-ignore-bg") as HTMLInputElement;
+const traceDenoise = $("trace-denoise") as HTMLInputElement;
+const traceDark = $("trace-dark") as HTMLInputElement;
+const traceSummary = $("trace-summary");
+const traceApply = $("trace-apply") as HTMLButtonElement;
+/** 正在生成的参考图；null 表示面板没打开 */
+let traceTarget: RefImage | null = null;
+let tracePreview: { k: number; cells: TraceCell[] } | null = null;
+let traceTimer = 0;
+let traceRun = 0;
+
+function openTrace() {
+  if (!imgSel) return;
+  traceTarget = imgSel;
+  // 格子大小：当前笔刷上下各两级，默认当前笔刷（格子太多时自动选大一级）
+  const kb = brushLevel(cam.zoom);
+  traceCell.replaceChildren();
+  let def = kb;
+  while (traceArea(traceTarget, def).area > MAX_TRACE_AREA && def < kb + 3) def++;
+  for (let k = kb - 2; k <= kb + 2; k++) {
+    const o = document.createElement("option");
+    o.value = String(k);
+    const n = traceArea(traceTarget, k).area;
+    o.textContent = `${formatLength(worldToMeters(levelStep(k)))}${k === kb ? t("（当前笔刷）") : ""}`;
+    o.disabled = n > MAX_TRACE_AREA;
+    traceCell.appendChild(o);
+  }
+  traceCell.value = String(def);
+  // 颜色选择
+  traceLineColor.replaceChildren();
+  traceColorsEl.replaceChildren();
+  for (const e of legend) {
+    const o = document.createElement("option");
+    o.value = e.color;
+    o.textContent = t(e.name);
+    traceLineColor.appendChild(o);
+    const chip = document.createElement("label");
+    chip.className = "trace-chip";
+    const cb = document.createElement("input");
+    cb.type = "checkbox";
+    cb.checked = true;
+    cb.value = e.color;
+    cb.addEventListener("change", scheduleTrace);
+    const sw = document.createElement("i");
+    sw.style.background = e.color;
+    chip.append(cb, sw, document.createTextNode(t(e.name)));
+    traceColorsEl.appendChild(chip);
+  }
+  traceLineColor.value = (legend.find((e) => e.role === "wall") ?? legend[0])?.color ?? currentColor;
+  syncTraceMode();
+  tracePanel.hidden = false;
+  imagePanel.hidden = true;
+  scheduleTrace();
+}
+function closeTrace() {
+  traceTarget = null;
+  tracePreview = null;
+  tracePanel.hidden = true;
+  clearTimeout(traceTimer);
+  requestRender();
+}
+function syncTraceMode() {
+  const line = traceMode.value === "line";
+  $("trace-tol-row").hidden = line;
+  $("trace-colors-row").hidden = line;
+  $("trace-bg-label").hidden = line;
+  $("trace-dark-label").hidden = line;
+  $("trace-thr-row").hidden = !line;
+  $("trace-line-row").hidden = !line;
+  $("trace-tol-text").textContent = `${traceTol.value}%`;
+  $("trace-thr-text").textContent = `${traceThr.value}%`;
+}
+function traceOptions(): TraceOptions {
+  return {
+    mode: traceMode.value === "line" ? "line" : "color",
+    k: Number(traceCell.value),
+    tolerance: Number(traceTol.value) / 100,
+    threshold: Number(traceThr.value) / 100,
+    lineColor: traceLineColor.value,
+    colors: [...traceColorsEl.querySelectorAll<HTMLInputElement>("input:checked")].map((c) => c.value),
+    ignoreBg: traceIgnoreBg.checked,
+    darkColor: traceDark.checked ? (legend.find((e) => e.role === "wall") ?? legend[0])?.color ?? null : null,
+    denoise: traceDenoise.checked,
+  };
+}
+function scheduleTrace() {
+  syncTraceMode();
+  clearTimeout(traceTimer);
+  traceTimer = window.setTimeout(() => void runTrace(), 120);
+}
+async function runTrace() {
+  const target = traceTarget;
+  if (!target) return;
+  const run = ++traceRun;
+  await imageStore.ready(target.id);
+  const img = imageStore.get(target.id);
+  if (run !== traceRun || traceTarget !== target) return;
+  if (!img) { traceSummary.textContent = t("图片还没加载好，请稍后再试"); return; }
+  const o = traceOptions();
+  const res = traceImage(img, target, o);
+  tracePreview = { k: o.k, cells: res.cells };
+  traceApply.disabled = res.tooMany || !res.cells.length;
+  traceSummary.textContent = res.tooMany ? t("格子太多，请选大一点的格子")
+    : res.cells.length ? t("将生成 {n} 个格子，每格 {size}", { n: res.cells.length.toLocaleString(), size: formatLength(worldToMeters(levelStep(o.k))) })
+    : o.mode === "color" && !o.colors.length ? t("请至少勾选一种颜色") : t("没有匹配的格子，试试调大容差或换一种方式");
+  requestRender();
+}
+function drawTracePreview() {
+  if (!tracePreview) return;
+  const s = levelStep(tracePreview.k), px = s * cam.zoom;
+  ctx.save();
+  ctx.globalAlpha = 0.85;
+  const byColor = new Map<string, TraceCell[]>();
+  for (const c of tracePreview.cells) {
+    let l = byColor.get(c.color);
+    if (!l) byColor.set(c.color, (l = []));
+    l.push(c);
+  }
+  for (const [color, list] of byColor) {
+    ctx.fillStyle = color;
+    ctx.beginPath();
+    for (const c of list) {
+      const p = cam.worldToScreen(c.i * s, c.j * s);
+      if (p.x > width || p.y > height || p.x + px < 0 || p.y + px < 0) continue;
+      ctx.rect(p.x, p.y, Math.max(px, 0.5), Math.max(px, 0.5));
+    }
+    ctx.fill();
+  }
+  ctx.restore();
+}
+function applyTrace() {
+  if (!tracePreview || !tracePreview.cells.length) return;
+  const change: Change = new Map();
+  const { k, cells } = tracePreview;
+  for (const c of cells) layer.paint(k, c.i, c.j, c.color, change);
+  commit(change);
+  const n = cells.length;
+  closeTrace();
+  toast(t("已生成 {n} 个格子（Ctrl+Z 可撤销）。可以把参考图调淡或隐藏后检查效果", { n: n.toLocaleString() }));
+}
+$("image-trace").addEventListener("click", openTrace);
+$("trace-cancel").addEventListener("click", closeTrace);
+traceApply.addEventListener("click", applyTrace);
+for (const el of [traceMode, traceCell, traceLineColor, traceIgnoreBg, traceDenoise, traceDark]) el.addEventListener("change", scheduleTrace);
+for (const el of [traceTol, traceThr]) el.addEventListener("input", scheduleTrace);
 
 const imageInput = $("file-image") as HTMLInputElement;
 $("btn-image").addEventListener("click", () => imageInput.click());
@@ -2226,6 +2383,7 @@ window.addEventListener("keydown", (e) => {
     if (!spaceDown) { spaceDown = true; canvas.classList.add("space"); requestRender(); }
     return;
   }
+  if (e.key === "Escape" && traceTarget) { closeTrace(); return; }
   if (e.key === "Escape") { cancelDraft(); clearSelection(); return; }
   if (imgSel && tool === "select" && (e.key === "Delete" || e.key === "Backspace")) { e.preventDefault(); deleteImage(); return; }
   if (selection && (e.key === "Delete" || e.key === "Backspace")) { e.preventDefault(); deleteSelection(); return; }

@@ -139,6 +139,54 @@
         <button id="image-front" title="把这张图放到其他参考图上面">置顶</button>
         <button id="image-delete" class="danger-text" title="删除这张参考图 (Delete)">删除</button>
       </div>
+      <div class="opt-row">
+        <button id="image-trace" class="primary wide" title="按图片的颜色或线条自动涂格子，先预览再生成">从这张图生成 layout…</button>
+      </div>
+    </div>
+    <div class="tool-options image-options trace-options" id="trace-options" hidden>
+      <div class="opt-row"><strong>从参考图生成</strong><span class="opt-tip">画布上是预览，满意再点“生成”</span></div>
+      <div class="opt-row" title="按颜色匹配：每格换成最接近的颜色说明颜色，适合彩色平面图。线稿：深色的地方涂成一种颜色，适合黑白线稿或扫描图">
+        <span class="opt-label">方式</span>
+        <select id="trace-mode">
+          <option value="color">按颜色匹配</option>
+          <option value="line">线稿（深色涂一种颜色）</option>
+        </select>
+      </div>
+      <div class="opt-row" title="生成的格子有多大；越小越精细，格子数也越多">
+        <span class="opt-label">格子大小</span>
+        <select id="trace-cell"></select>
+      </div>
+      <div class="opt-row" id="trace-tol-row" title="图片颜色和颜色说明差多少以内才涂；调大会涂得更多">
+        <span class="opt-label">容差</span>
+        <input id="trace-tol" type="range" min="5" max="100" step="1" value="35" aria-label="颜色容差" />
+        <span id="trace-tol-text" class="opt-num">35%</span>
+      </div>
+      <div class="opt-row" id="trace-thr-row" title="比这个更暗的地方才涂；调大会把浅灰色也算进去" hidden>
+        <span class="opt-label">深浅</span>
+        <input id="trace-thr" type="range" min="5" max="95" step="1" value="50" aria-label="深浅阈值" />
+        <span id="trace-thr-text" class="opt-num">50%</span>
+      </div>
+      <div class="opt-row" id="trace-line-row" hidden>
+        <span class="opt-label">涂成</span>
+        <select id="trace-line-color" aria-label="线稿涂成的颜色"></select>
+      </div>
+      <div class="trace-colors" id="trace-colors-row">
+        <span class="opt-label">可用颜色</span>
+        <div id="trace-colors" class="trace-chips"></div>
+      </div>
+      <div class="opt-row">
+        <label class="check" id="trace-bg-label" title="跳过白色和浅灰色的背景"><input id="trace-ignore-bg" type="checkbox" checked /> 忽略白色背景</label>
+        <label class="check" title="去掉周围没有同色格子的孤立小点"><input id="trace-denoise" type="checkbox" checked /> 去除杂点</label>
+      </div>
+      <div class="opt-row">
+        <label class="check" id="trace-dark-label" title="平面图里常用黑色或深灰色画墙；勾选后这些线条直接涂成颜色说明里的墙体颜色"><input id="trace-dark" type="checkbox" checked /> 黑色线条算作墙</label>
+      </div>
+      <div class="opt-row"><span id="trace-summary" class="opt-tip"></span></div>
+      <div class="opt-row">
+        <span class="spacer"></span>
+        <button id="trace-cancel">取消</button>
+        <button id="trace-apply" class="primary">生成</button>
+      </div>
     </div>
     <aside class="legend" id="legend" aria-label="颜色说明">
       <div class="legend-head">
