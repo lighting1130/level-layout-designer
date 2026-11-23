@@ -10,7 +10,7 @@
 
 ## 怎么用
 
-**菜单**：**Tools → Level Layout → Import Level Layout...**，选工程文件，在弹出的对话框里调整选项后点 **Import**。
+**菜单**：**Tools** 菜单里 **Level Layout** 一栏的 **Import Level Layout...**，选工程文件，在弹出的对话框里调整选项后点 **Import**。
 
 **控制台 / 命令行**（Output Log 的 Cmd，或启动参数 `-ExecCmds="..."`）：
 
@@ -107,3 +107,14 @@ UnrealEditor-Cmd.exe 你的项目.uproject -ExecCmds="Automation RunTests LevelL
 - `Public/LevelLayoutImportLibrary.h`：给蓝图和 Python 用的接口。
 - `Private/LevelLayoutImporterModule.cpp`：Tools 菜单和控制台命令。
 - 源码只用 ASCII（中文写成 `\u` 转义），避免中文 Windows 下 MSVC 按 GBK 读源码出错。
+
+## 在 UE 5.8 里的验证结果（2026-11-23）
+
+UE 5.8.4 + VS 2022（MSVC 14.44），`RunUAT BuildPlugin` 编译无警告，7 组自动化测试全部通过。示例工程导入：
+
+| 后端 | 结果 | 和 Python 原型对比（36 个盒子逐个） |
+| --- | --- | --- |
+| Auto（Blockout Tools 1.52，量到尺寸比例 1、枢轴在角上） | 36 盒子、4 图标、1 备注、1 NavMesh 范围 | 位置、尺寸最大差 0.000003 cm |
+| Cube | 同上 | 最大差 0.000003 cm |
+
+中文用微软雅黑生成的字体正常显示；一次撤销删掉全部 45 个 Actor，重做恢复；再次导入替换上次的 45 个；NavMesh 范围包住整个白盒。

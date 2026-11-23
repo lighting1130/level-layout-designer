@@ -119,7 +119,7 @@ namespace LevelLayout
 			int64 K = 0, I = 0, J = 0;
 			FString Color;
 			if (GetInt(C, TEXT("k"), K) && GetInt(C, TEXT("i"), I) && GetInt(C, TEXT("j"), J) && GetString(C, TEXT("color"), Color)
-				&& K >= 0 && K < 16)
+				&& K >= -8 && K <= 8) // k < 0 = finer sub-cells; the range keeps Pow10 differences inside int64
 			{
 				FCell Cell;
 				Cell.Key = FCellKey{(int32)K, I, J};
@@ -229,7 +229,7 @@ namespace LevelLayout
 			{
 				if (Pair.Value.IsValid() && Pair.Value->Type == EJson::String)
 				{
-					Out.IconLabels.Add(Pair.Key, Pair.Value->AsString());
+					Out.IconLabels.Add(FString(*Pair.Key), Pair.Value->AsString()); // Key is FSharedString in UE 5.8, FString before
 				}
 			}
 		}
@@ -318,7 +318,7 @@ namespace LevelLayout
 		{
 			return Out;
 		}
-		int32 KMax = 0;
+		int32 KMax = Cells[0].Key.K;
 		for (const FCell& C : Cells)
 		{
 			KMax = FMath::Max(KMax, C.Key.K);
@@ -839,7 +839,7 @@ namespace LevelLayout
 				{
 					continue;
 				}
-				const double Step = CellSize * (double)Pow10(GK.Value) * W2Cm;
+				const double Step = CellSize * FMath::Pow((double)Subdivision, (double)GK.Value) * W2Cm; // GK.Value < 0 for sub-cells
 				double Zb, H;
 				Slab(Role, Color, Zb, H);
 				for (const FRect64& R : GreedyRects64(Groups[GK]))
