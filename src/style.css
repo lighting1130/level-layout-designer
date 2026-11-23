@@ -103,6 +103,8 @@ button:disabled { opacity: 0.4; cursor: default; }
 #icon-rename { flex: 1; min-width: 0; }
 #icon-size { width: 44px; }
 #image-rot { width: 56px; }
+#sel-icon-size { width: 64px; }
+#sel-icon-row .opt-label { white-space: nowrap; }
 .image-options { width: 220px; box-sizing: border-box; }
 .image-options .opt-tip { font-size: 12px; opacity: 0.6; margin-left: auto; }
 .image-options input[type="range"] { flex: 1; min-width: 0; accent-color: #7aa2f7; }

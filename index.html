@@ -82,12 +82,13 @@
           <button id="icon-import" title="用自己的图片（PNG / SVG / JPG / WebP）做图标，可一次选多张">+ 导入图标</button>
           <input id="file-icon" type="file" accept="image/png,image/svg+xml,image/jpeg,image/webp,image/gif" multiple hidden />
         </div>
-        <div class="opt-row" title="图标边长，单位是当前笔刷格子">
+        <div class="opt-row" title="图标边长，单位是当前笔刷格子；也可以按 [ 和 ] 调整">
           <span class="opt-label">大小</span>
           <button id="icon-dec" aria-label="缩小图标">−</button>
           <input id="icon-size" type="number" min="1" max="20" step="1" value="2" aria-label="图标大小（格）" />
           <button id="icon-inc" aria-label="放大图标">+</button>
           <span>格</span>
+          <span id="icon-size-m" class="opt-tip"></span>
         </div>
       </div>
       <div id="stroke-options" class="opt-col stroke" hidden>
@@ -117,6 +118,13 @@
         <span class="opt-label">旋转</span>
         <button id="sel-rot-ccw">↺ 90°</button>
         <button id="sel-rot-cw">↻ 90°</button>
+      </div>
+      <div class="opt-row" id="sel-icon-row" title="选中图标的边长（米），每个图标以自己的中心缩放。也可以按 [ 和 ] 调整" hidden>
+        <span class="opt-label">图标</span>
+        <button id="sel-icon-dec" aria-label="缩小选中的图标">−</button>
+        <input id="sel-icon-size" type="number" min="0.01" step="any" aria-label="选中图标的大小（米）" />
+        <button id="sel-icon-inc" aria-label="放大选中的图标">+</button>
+        <span>m</span>
       </div>
     </div>
     <div class="tool-options image-options" id="image-options" hidden>
