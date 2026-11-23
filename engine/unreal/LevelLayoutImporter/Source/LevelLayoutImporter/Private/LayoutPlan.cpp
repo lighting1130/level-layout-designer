@@ -861,7 +861,7 @@ namespace LevelLayout
 			const FVector2D P(M.Location.X, M.Location.Y);
 			// The wall the icon sits on: the one whose footprint contains it, the thinnest if several do.
 			const FBoxItem* Host = nullptr;
-			FVector2D HostLocal;
+			FVector2D HostLocal = FVector2D::ZeroVector;
 			for (const FBoxItem& B : Plan.Boxes)
 			{
 				FVector2D Local;
