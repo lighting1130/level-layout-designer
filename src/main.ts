@@ -5,7 +5,7 @@ import { CellLayer, type Cell, type Change } from "./cells";
 import { ARROW_LABELS, arrowHeads, isArrowMode, type ArrowMode, MAX_SHAPE_CELLS, SHAPE_LABELS, TooManyCellsError, arcPoints, rasterizeFill, rasterizeThickStroke, clampSides, shapeBox, shapePolygon, type CellIJ, type Pt, type ShapeKind } from "./shapes";
 import { drawVector, drawVectors, hitVector, isClosed, moveVector, rotQuarter, rotateVector, vectorBounds, sanitizeVectors, type VectorShape } from "./vectors";
 import { drawNotes, moveNoteLabel, moveNotePin, type Note, type NoteBox } from "./notes";
-import { DEFAULT_OPACITY, ImageStore, clampOpacity, drawRefImages, loadImageFile, normAngle, refImageCorners, refImageLocal, type RefImage } from "./refimages";
+import { DEFAULT_OPACITY, ImageStore, clampOpacity, drawRefImages, loadImageFile, normAngle, refImageBounds, refImageCorners, refImageLocal, type RefImage } from "./refimages";
 import { ICONS, customImageId, customKind, drawIconAt, drawIcons, hitIcon, isBuiltinIcon, normRot, sanitizeCustomIcons, type CustomIcon, type MapIcon } from "./icons";
 import { DEFAULT_EXPORT, canvasToPng, makeZip, renderExport, type ExportOptions } from "./exportimage";
 import { MAX_TRACE_AREA, SMART_CLASSES, traceArea, traceImage, type SmartClass, type TraceCell, type TraceOptions } from "./trace";
@@ -397,7 +397,7 @@ let images: RefImage[] = [];
 const imageStore = new ImageStore(requestRender);
 /** 框选工具下选中的参考图，以及正在拖动/缩放的参考图（放在这里声明，启动时加载楼层就会用到） */
 let imgSel: RefImage | null = null;
-let imgDrag: { img: RefImage; kind: "move" | "resize" | "rotate"; hx: number; hy: number; start: Pt; startScreen: Pt; dx: number; dy: number; moved: boolean; shift: boolean } | null = null;
+let imgDrag: { img: RefImage; kind: "move" | "resize" | "rotate"; hx: number; hy: number; start: Pt; startScreen: Pt; dx: number; dy: number; moved: boolean; shift: boolean; alt: boolean } | null = null;
 /** 当前楼层的关卡图标 */
 let icons: MapIcon[] = [];
 /** 用户导入的图标库（所有楼层共用） */
@@ -1352,6 +1352,67 @@ function clearSelection() {
 // ---------------- 参考图 ----------------
 /** 拖动中的参考图预览：移动、拖四角等比缩放（Shift 自由）、拖四边单向拉伸，或拖上方圆点旋转 */
 function draggedImage(d: NonNullable<typeof imgDrag>): RefImage {
+  snapGuides = [];
+  const raw = rawDraggedImage(d);
+  if (!imageSnap.checked || d.alt) return raw;
+  if (d.kind === "rotate") {
+    // 旋转：没按 Shift 时，靠近 0/90/180/270° 的 4° 以内自动转正
+    const rot = raw.rot ?? 0;
+    const q = Math.round(rot / 90) * 90;
+    return !d.shift && Math.abs(rot - q) <= 4 && rot !== normAngle(q) ? withRot(raw, normAngle(q)) : raw;
+  }
+  const rot = raw.rot ?? 0;
+  if (d.kind === "resize" && rot % 90) return raw; // 斜着的图片缩放不吸附
+  const tol = 8 / cam.zoom;
+  const st = levelStep(brushLevel(cam.zoom));
+  // 吸附目标：同层其他参考图的边和中线（优先），以及格线
+  const xs: number[] = [], ys: number[] = [];
+  for (const o of images) {
+    if (o === d.img) continue;
+    const b = refImageBounds(o);
+    xs.push(b.x0, (b.x0 + b.x1) / 2, b.x1);
+    ys.push(b.y0, (b.y0 + b.y1) / 2, b.y1);
+  }
+  const best = (vals: number[], targets: number[]) => {
+    let out: { delta: number; at: number; grid: boolean } | null = null;
+    for (const v of vals) {
+      for (const tg of targets) if (Math.abs(tg - v) <= tol && (!out || Math.abs(tg - v) < Math.abs(out.delta) - 1e-9)) out = { delta: tg - v, at: tg, grid: false };
+      const g = Math.round(v / st) * st;
+      if (Math.abs(g - v) <= tol && (!out || Math.abs(g - v) < Math.abs(out.delta) - tol / 2)) out = { delta: g - v, at: g, grid: true };
+    }
+    return out;
+  };
+  const b = refImageBounds(raw);
+  if (d.kind === "move") {
+    const sx = best([b.x0, (b.x0 + b.x1) / 2, b.x1], xs), sy = best([b.y0, (b.y0 + b.y1) / 2, b.y1], ys);
+    if (sx) snapGuides.push({ x: sx.at, grid: sx.grid });
+    if (sy) snapGuides.push({ y: sy.at, grid: sy.grid });
+    return { ...raw, x: raw.x + (sx?.delta ?? 0), y: raw.y + (sy?.delta ?? 0) };
+  }
+  // 缩放：拖动的那条边（世界方向）吸附；换算成拖动量再算一遍，等比缩放时另一边跟着变
+  const q = ((Math.round(rot / 90) % 4) + 4) % 4;
+  let wx = d.hx, wy = d.hy;
+  for (let n = 0; n < q; n++) [wx, wy] = [-wy, wx];
+  const sx = wx ? best([wx > 0 ? b.x1 : b.x0], xs) : null;
+  const sy = wy ? best([wy > 0 ? b.y1 : b.y0], ys) : null;
+  let out = raw;
+  let bestD = Infinity;
+  for (const [s, ddx, ddy] of [[sx, sx?.delta ?? 0, 0], [sy, 0, sy?.delta ?? 0]] as const) {
+    if (!s) continue;
+    const cand = rawDraggedImage({ ...d, dx: d.dx + ddx, dy: d.dy + ddy });
+    const cb = refImageBounds(cand);
+    const edge = ddx ? (wx > 0 ? cb.x1 : cb.x0) : (wy > 0 ? cb.y1 : cb.y0);
+    if (Math.abs(edge - s.at) < 1e-6 && Math.abs(s.delta) < bestD) {
+      bestD = Math.abs(s.delta);
+      out = cand;
+      snapGuides = [ddx ? { x: s.at, grid: s.grid } : { y: s.at, grid: s.grid }];
+    }
+  }
+  return out;
+}
+/** 吸附时显示的参考线（世界坐标）；grid：吸到的是格线 */
+let snapGuides: { x?: number; y?: number; grid: boolean }[] = [];
+function rawDraggedImage(d: NonNullable<typeof imgDrag>): RefImage {
   const r = d.img;
   if (d.kind === "move") return { ...r, x: r.x + d.dx, y: r.y + d.dy };
   const cx = r.x + r.w / 2, cy = r.y + r.h / 2;
@@ -1431,14 +1492,14 @@ function beginImageDrag(img: RefImage, kind: "move" | "resize" | "rotate", p: Pt
   mode = "imgDrag";
   selection = null;
   imgSel = img;
-  imgDrag = { img, kind, hx, hy, start: cam.screenToWorld(p.x, p.y), startScreen: p, dx: 0, dy: 0, moved: false, shift: false };
+  imgDrag = { img, kind, hx, hy, start: cam.screenToWorld(p.x, p.y), startScreen: p, dx: 0, dy: 0, moved: false, shift: false, alt: false };
 }
 function endImageDrag() {
   const d = imgDrag;
   imgDrag = null;
   if (!d || !d.moved || (!d.dx && !d.dy)) return;
   const next = draggedImage(d);
-  if (next.x === d.img.x && next.y === d.img.y && next.w === d.img.w && (next.rot ?? 0) === (d.img.rot ?? 0)) { requestRender(); return; }
+  if (next.x === d.img.x && next.y === d.img.y && next.w === d.img.w && next.h === d.img.h && (next.rot ?? 0) === (d.img.rot ?? 0)) { requestRender(); return; }
   replaceImage(d.img, next);
 }
 /** 替换一张参考图（记入撤销） */
@@ -1487,6 +1548,19 @@ function drawImageSelection() {
       ctx.fillRect(r.p.x - sz / 2, r.p.y - sz / 2, sz, sz);
       ctx.strokeRect(r.p.x - sz / 2, r.p.y - sz / 2, sz, sz);
     }
+  }
+  if (imgDrag?.moved) {
+    // 吸附参考线：吸到其他参考图是粉色实线，吸到格线是淡色虚线
+    for (const g of snapGuides) {
+      ctx.strokeStyle = g.grid ? "rgba(255,120,200,0.6)" : "#ff5fb4";
+      ctx.lineWidth = 1;
+      ctx.setLineDash(g.grid ? [4, 4] : []);
+      ctx.beginPath();
+      if (g.x !== undefined) { const sx = Math.round(cam.worldToScreen(g.x, 0).x) + 0.5; ctx.moveTo(sx, 0); ctx.lineTo(sx, height); }
+      else if (g.y !== undefined) { const sy = Math.round(cam.worldToScreen(0, g.y).y) + 0.5; ctx.moveTo(0, sy); ctx.lineTo(width, sy); }
+      ctx.stroke();
+    }
+    ctx.setLineDash([]);
   }
   if (imgDrag?.moved && imgDrag.kind === "rotate") {
     ctx.font = "12px system-ui, sans-serif";
@@ -1582,6 +1656,14 @@ $("sel-rot-cw").addEventListener("click", () => rotateSelection(1));
 const imageOpacity = $("image-opacity") as HTMLInputElement;
 const imageOpacityText = $("image-opacity-text");
 const imageLock = $("image-lock") as HTMLInputElement;
+/** 拖动参考图时自动吸附（记住选择；按住 Alt 临时关闭） */
+const imageSnap = $("image-snap") as HTMLInputElement;
+const IMAGE_SNAP_KEY = "level-layout-designer.imagesnap.v1";
+try { imageSnap.checked = localStorage.getItem(IMAGE_SNAP_KEY) !== "0"; } catch { /* 忽略 */ }
+imageSnap.addEventListener("change", () => {
+  try { localStorage.setItem(IMAGE_SNAP_KEY, imageSnap.checked ? "1" : "0"); } catch { /* 忽略 */ }
+  imageSnap.blur();
+});
 /** 拖动透明度滑块时先实时预览，松手时整体记一步撤销 */
 let opacityBefore: RefImage[] | null = null;
 function syncImagePanel() {
@@ -2618,6 +2700,7 @@ canvas.addEventListener("pointermove", (e) => {
       imgDrag.dx = w.x - imgDrag.start.x;
       imgDrag.dy = w.y - imgDrag.start.y;
       imgDrag.shift = e.shiftKey;
+      imgDrag.alt = e.altKey;
     }
   } else if (mode === "noteDrag" && noteDrag) {
     if (Math.hypot(p.x - noteDrag.startScreen.x, p.y - noteDrag.startScreen.y) > 3) noteDrag.moved = true;
