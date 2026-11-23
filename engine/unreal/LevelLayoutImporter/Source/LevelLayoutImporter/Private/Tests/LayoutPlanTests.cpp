@@ -238,8 +238,14 @@ bool FLevelLayoutVectorsTest::RunTest(const FString&)
 	const FString Ellipse = FString::Printf(TEXT("{\"kind\":\"ellipse\",\"a\":{\"x\":0,\"y\":0},\"b\":{\"x\":64,\"y\":64},\"color\":\"%s\",\"width\":4,\"fill\":true}"), Floor);
 	if (Plan(*this, ProjectJson(FString(), Ellipse), P))
 	{
-		TestEqual(TEXT("filled ellipse skipped"), P.Boxes.Num(), 0);
-		TestTrue(TEXT("filled ellipse warns"), P.Warnings.Num() > 0);
+		TestEqual(TEXT("filled ellipse is no box"), P.Boxes.Num(), 0);
+		if (TestEqual(TEXT("filled ellipse is a mesh"), P.Meshes.Num(), 1))
+		{
+			TestTrue(TEXT("ellipse outline"), P.Meshes[0].Points.Num() >= 12);
+			TestEqual(TEXT("ellipse is a floor slab"), P.Meshes[0].Height, 30.0, 1e-6);
+			TestEqual(TEXT("ellipse slab top at 0"), P.Meshes[0].ZBottom + P.Meshes[0].Height, 0.0, 1e-6);
+		}
+		TestEqual(TEXT("no warning"), P.Warnings.Num(), 0);
 	}
 
 	FVectorShape Tri;
@@ -316,14 +322,169 @@ bool FLevelLayoutSampleTest::RunTest(const FString&)
 	}
 	TestTrue(TEXT("all roles"), Roles.Contains(TEXT("wall")) && Roles.Contains(TEXT("floor")) && Roles.Contains(TEXT("water")) && Roles.Contains(TEXT("hazard")));
 	TestEqual(TEXT("levels"), P.LevelZ.Num(), 3);
-	TestEqual(TEXT("boxes (same as the Python prototype)"), P.Boxes.Num(), 36);
-	TestEqual(TEXT("icons"), P.Markers.Num(), 4);
+	TestEqual(TEXT("icons"), P.Markers.Num(), 6);
+	TestEqual(TEXT("filled ellipse mesh"), P.Meshes.Num(), 1);
+	TestEqual(TEXT("no warnings"), P.Warnings.Num(), 0);
+	for (const FString& W : P.Warnings)
+	{
+		AddInfo(W);
+	}
+	int32 Steps = 0;
+	for (const FBoxItem& B : P.Boxes)
+	{
+		Steps += B.Role == TEXT("stairs") ? 1 : 0;
+	}
+	TestEqual(TEXT("one flight of 25 steps (stairs-up and stairs-down icons are the same stairs)"), Steps, 25);
+	TestTrue(TEXT("water / hazard volumes"), P.Volumes.Num() >= 2);
+	for (const FMarkerItem& M : P.Markers)
+	{
+		if (M.Kind == TEXT("door") || M.Kind.StartsWith(TEXT("stairs")))
+		{
+			TestTrue(FString::Printf(TEXT("%s built"), *M.Kind), M.bBuilt);
+		}
+	}
 	TestEqual(TEXT("notes"), P.Notes.Num(), 1);
 	TestTrue(TEXT("cells are merged"), FromCells < 60);
 	const FMarkerItem* Chest = P.Markers.FindByPredicate([](const FMarkerItem& M) { return M.Kind == TEXT("chest"); });
 	if (TestNotNull(TEXT("chest"), Chest))
 	{
 		TestEqual(TEXT("chest label"), Chest->Label, FString(TEXT("\u91D1\u94A5\u5319\u5B9D\u7BB1")));
+	}
+	return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FLevelLayoutSubtractTest, "LevelLayout.Plan.SubtractBox", LL_TEST_FLAGS)
+bool FLevelLayoutSubtractTest::RunTest(const FString&)
+{
+	FBoxItem B;
+	B.Role = TEXT("wall");
+	B.Size = FVector(100, 100, 100);
+	TArray<FBoxItem> Pieces;
+	if (TestTrue(TEXT("cut through the middle"), SubtractBox(B, FVector::ZeroVector, FVector(50, 200, 200), 0, Pieces)))
+	{
+		TestEqual(TEXT("two halves left"), Pieces.Num(), 2);
+		double Volume = 0;
+		for (const FBoxItem& Piece : Pieces)
+		{
+			Volume += Piece.Size.X * Piece.Size.Y * Piece.Size.Z;
+		}
+		TestEqual(TEXT("volume left"), Volume, 500000.0, 1e-3);
+	}
+	TestTrue(TEXT("cut rotated 90 degrees"), SubtractBox(B, FVector(0, 0, 0), FVector(50, 200, 200), 90, Pieces) && Pieces.Num() == 2 && FMath::IsNearlyEqual(Pieces[0].Size.Y, 25.0));
+	TestFalse(TEXT("45 degrees cannot be cut"), SubtractBox(B, FVector::ZeroVector, FVector(50, 50, 50), 45, Pieces));
+	TestFalse(TEXT("no overlap"), SubtractBox(B, FVector(500, 0, 0), FVector(50, 50, 50), 0, Pieces));
+
+	// A yawed wall: the pieces stay on its axis.
+	FBoxItem R = B;
+	R.Size = FVector(1000, 20, 400);
+	R.Yaw = 30;
+	R.Center = FVector(100, 200, 200);
+	const FVector2D Dir(FMath::Cos(FMath::DegreesToRadians(30.0)), FMath::Sin(FMath::DegreesToRadians(30.0)));
+	if (TestTrue(TEXT("cut a yawed wall"), SubtractBox(R, FVector(100, 200, 150), FVector(200, 40, 300), 30, Pieces)))
+	{
+		TestEqual(TEXT("left, right, lintel"), Pieces.Num(), 3);
+		for (const FBoxItem& Piece : Pieces)
+		{
+			const FVector2D Off(Piece.Center.X - 100, Piece.Center.Y - 200);
+			TestEqual(TEXT("piece on the wall axis"), FMath::Abs(Off.X * Dir.Y - Off.Y * Dir.X), 0.0, 1e-6);
+		}
+	}
+	return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FLevelLayoutDoorTest, "LevelLayout.Plan.Doors", LL_TEST_FLAGS)
+bool FLevelLayoutDoorTest::RunTest(const FString&)
+{
+	// A wall along Y (column 0, rows 0..9) with a door icon at row 5.
+	FString CellsJson;
+	for (int32 J = 0; J < 10; ++J)
+	{
+		CellsJson += (J ? TEXT(",") : TEXT("")) + Cell(0, 0, J, Wall);
+	}
+	const FString Json = FString::Printf(TEXT("{\"format\":\"level-layout-designer\",\"version\":5,\"legend\":[{\"name\":\"wall\",\"color\":\"%s\"}],")
+		TEXT("\"floors\":[{\"level\":1,\"cells\":[%s],\"icons\":[{\"kind\":\"door\",\"x\":16,\"y\":160,\"size\":32},{\"kind\":\"locked\",\"x\":200,\"y\":200,\"size\":32}]}]}"),
+		Wall, *CellsJson);
+	FPlan P;
+	if (!Plan(*this, Json, P))
+	{
+		return false;
+	}
+	TestEqual(TEXT("wall split into two pieces and a lintel"), P.Boxes.Num(), 3);
+	bool bBlocked = false, bLintel = false;
+	for (const FBoxItem& B : P.Boxes)
+	{
+		const FBox Bx(B.Center - B.Size / 2, B.Center + B.Size / 2);
+		bBlocked |= Bx.IsInside(FVector(50, 500, 150));
+		bLintel |= FMath::IsNearlyEqual(B.Size.Y, 200.0) && FMath::IsNearlyEqual(B.Size.Z, 100.0) && FMath::IsNearlyEqual(B.Center.Z, 350.0);
+	}
+	TestFalse(TEXT("opening is clear"), bBlocked);
+	TestTrue(TEXT("lintel 2 m wide over a 3 m opening"), bLintel);
+	TestTrue(TEXT("door built"), P.Markers[0].bBuilt);
+	TestFalse(TEXT("locked door off the wall is not built"), P.Markers[1].bBuilt);
+	TestEqual(TEXT("warning for the door off the wall"), P.Warnings.Num(), 1);
+	return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FLevelLayoutStairsTest, "LevelLayout.Plan.Stairs", LL_TEST_FLAGS)
+bool FLevelLayoutStairsTest::RunTest(const FString&)
+{
+	// 1F and 2F (5 m apart), 2F has a 10 x 10 m floor; stairs-up on 1F at (5 m, 5 m) going +X, stairs-down on 2F at the same place.
+	const FString Json = FString::Printf(TEXT("{\"format\":\"level-layout-designer\",\"version\":5,\"legend\":[{\"name\":\"floor\",\"color\":\"%s\"}],\"floors\":[")
+		TEXT("{\"level\":2,\"cells\":[%s],\"icons\":[{\"kind\":\"stairs-down\",\"x\":160,\"y\":160,\"rot\":180}]},")
+		TEXT("{\"level\":1,\"icons\":[{\"kind\":\"stairs-up\",\"x\":160,\"y\":160,\"rot\":0}]}]}"),
+		Floor, *Cell(1, 0, 0, Floor));
+	FPlan P;
+	if (!Plan(*this, Json, P))
+	{
+		return false;
+	}
+	TArray<const FBoxItem*> Steps;
+	for (const FBoxItem& B : P.Boxes)
+	{
+		if (B.Role == TEXT("stairs"))
+		{
+			Steps.Add(&B);
+		}
+	}
+	if (TestEqual(TEXT("one flight of 25 steps of 20 cm"), Steps.Num(), 25))
+	{
+		TestEqual(TEXT("first step center"), Steps[0]->Center.X, 500.0 - 375.0 + 15.0, 1e-6);
+		TestEqual(TEXT("first step height"), Steps[0]->Size.Z, 20.0, 1e-6);
+		TestEqual(TEXT("top step reaches 2F"), Steps.Last()->Center.Z + Steps.Last()->Size.Z / 2, 500.0, 1e-6);
+		TestEqual(TEXT("stairs belong to 1F"), Steps[0]->Level, 1);
+		TestEqual(TEXT("stairs width"), Steps[0]->Size.Y, 200.0, 1e-6);
+	}
+	bool bCovered = false;
+	for (const FBoxItem& B : P.Boxes)
+	{
+		if (B.Level == 2)
+		{
+			const FBox Bx(B.Center - B.Size / 2, B.Center + B.Size / 2);
+			bCovered |= Bx.IsInside(FVector(500, 500, 485)) || Bx.IsInside(FVector(800, 500, 485)) || Bx.IsInside(FVector(200, 550, 485));
+		}
+	}
+	TestFalse(TEXT("2F floor is open over the stairs"), bCovered);
+	for (const FMarkerItem& M : P.Markers)
+	{
+		TestTrue(TEXT("stairs icons built"), M.bBuilt);
+	}
+	TestEqual(TEXT("no warnings"), P.Warnings.Num(), 0);
+	return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FLevelLayoutVolumesTest, "LevelLayout.Plan.Volumes", LL_TEST_FLAGS)
+bool FLevelLayoutVolumesTest::RunTest(const FString&)
+{
+	const FString Json = TEXT("{\"format\":\"level-layout-designer\",\"version\":5,\"legend\":[{\"name\":\"w\",\"color\":\"#3f8fd8\",\"role\":\"water\"}],")
+		TEXT("\"floors\":[{\"level\":1,\"cells\":[{\"k\":0,\"i\":0,\"j\":0,\"color\":\"#3f8fd8\"},{\"k\":0,\"i\":1,\"j\":0,\"color\":\"#3f8fd8\"}]}]}");
+	FPlan P;
+	if (Plan(*this, Json, P) && TestEqual(TEXT("one water volume"), P.Volumes.Num(), 1))
+	{
+		const FVolumeItem& V = P.Volumes[0];
+		TestEqual(TEXT("volume role"), V.Role, FString(TEXT("water")));
+		TestEqual(TEXT("volume footprint"), V.Size.X, 200.0, 1e-6);
+		TestEqual(TEXT("volume top 1 m over the floor"), V.Center.Z + V.Size.Z / 2, 100.0, 1e-6);
+		TestEqual(TEXT("volume bottom at the slab bottom"), V.Center.Z - V.Size.Z / 2, -40.0, 1e-6);
 	}
 	return true;
 }

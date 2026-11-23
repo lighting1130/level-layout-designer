@@ -15,11 +15,11 @@
 **控制台 / 命令行**（Output Log 的 Cmd，或启动参数 `-ExecCmds="..."`）：
 
 ```
-LevelLayout.Import D:/路径/第一关.json backend=auto levels=1,-1 wall=4 floor=5 keep nonav
+LevelLayout.Import D:/路径/第一关.json backend=auto levels=1,-1 wall=4 floor=5 keep nonav nodoors nostairs novolumes
 LevelLayout.Remove 第一关
 ```
 
-除了文件路径都是可选的；`keep` 保留上次生成的白盒，`nonav` 不加 NavMesh 范围。路径里不要有空格。
+除了文件路径都是可选的；`keep` 保留上次生成的白盒，`nonav` 不加 NavMesh 范围，`nodoors` / `nostairs` / `novolumes` 不开门洞 / 不建楼梯 / 不加水和伤害区的 Volume。路径里不要有空格。
 
 **Python / 编辑器工具蓝图**：
 
@@ -47,6 +47,9 @@ print(result.success, result.num_boxes, result.warnings)
 | Replace Previous | 先删掉同名工程上次生成的 Actor | 开 |
 | Backend | `Auto`：启用了 Blockout Tools 就用它的 Blockout_Box，否则用引擎 Cube；`Blockout`；`Cube` | Auto |
 | Add Nav Mesh Bounds | 在整个白盒外面加一个 NavMeshBoundsVolume | 开 |
+| Cut Doors / Door Width / Door Height | 门、锁着的门图标在所在的墙上开门洞 | 开，2 × 3 m |
+| Build Stairs / Stair Width / Stair Max Step Height / Stair Step Depth | 上楼梯、下楼梯图标生成直跑楼梯 | 开，宽 2 m，每级最高 0.2 m、深 0.3 m |
+| Add Volumes | 水域加水的 PhysicsVolume，伤害区加 PainCausingVolume | 开 |
 | Font | 文字用的字体，必须是 **Offline** 缓存的 Font | 空 = 有中文时自动生成 |
 | Generate Cjk Font | 文字里有非 ASCII 字符且没设 Font 时，用 Windows 系统字体生成 | 开 |
 | Asset Folder | 生成的材质实例、字体放在哪，后面会加工程名 | `/Game/LevelLayout` |
@@ -68,13 +71,28 @@ print(result.success, result.num_boxes, result.warnings)
 | 不在颜色说明里的颜色 | 按地面处理，有警告 |
 | 平滑直线、弧线、未填充的闭合图形 | 沿线摆一串旋转的盒子，宽 = 线宽 |
 | 填充的矩形 | 一个盒子 |
-| 填充的椭圆、三角形、多边形 | 暂不支持，有警告（第 2 阶段做） |
+| 填充的椭圆、三角形、菱形、六边形、多边形 | 按形状挤出的 Static Mesh（存在 `<Asset Folder>/<工程名>/Meshes/`），带凸包碰撞 |
+| 图标 door / locked | 在它所在的墙上开一个门洞（墙拆成两段 + 门楣），只留名字 |
+| 图标 stairs-up / stairs-down | 通往上一层 / 下一层的直跑楼梯，见下面“楼梯” |
+| 水域 / 伤害区 | 另外加一个水的 PhysicsVolume / 每秒 20 伤害的 PainCausingVolume，高出地面 1 m |
 | 图标 spawn | PlayerStart |
 | 图标 camera | CameraActor |
 | 在 Icon Actor Classes 里设了的图标 | 你的 Actor 类 |
 | 其它图标 | 小圆柱（enemy / boss 红色，其它青色）+ 名字 |
 | 备注 | 平放的 TextRenderActor，顶视图正着读 |
 | — | 包住整个白盒的 NavMeshBoundsVolume |
+
+### 楼梯
+
+- 楼梯**以图标为中心**，朝图标的方向往上走（下楼梯图标的方向是往下走的方向）。没设方向时朝 +X（网页里的右边）。
+- 级数按两层的高差算：每级不超过 0.2 m，深 0.3 m。层高 5 m 时是 25 级、7.5 m 长，比网页里的图标大很多，画的时候留出位置。
+- 上一层在楼梯上方的地面会开洞（楼梯井），最上一级接上一层地面的边。
+- 同一个位置上，1F 的上楼梯和 2F 的下楼梯算同一部楼梯，只建一次。
+- 楼梯是一级一级的盒子（Blockout_Box 或 Cube），可以单独调。
+
+### 门洞
+
+门图标要放在墙上（墙格子或平滑墙线上）。门洞沿墙的长边方向开，宽 2 m、高 3 m，墙拆成左右两段和门楣，仍然是普通的盒子。不在墙上的门图标会有警告。
 
 工程文件没写 `role` 时按颜色名字猜（墙体 / 地面 / 草地 / 水域 / 岩浆/伤害区 和对应英文名），猜不到的算“标记”。
 
@@ -102,8 +120,8 @@ UnrealEditor-Cmd.exe 你的项目.uproject -ExecCmds="Automation RunTests LevelL
 
 ## 源码
 
-- `Private/LayoutPlan.*`：读工程文件、格子压平、贪心合并、平滑图形转盒子、楼层标高。不碰 Actor，便于测试。
-- `Private/LayoutSceneBuilder.*`：把计划摆进关卡（Blockout / Cube、图标、文字、字体、NavMesh）。
+- `Private/LayoutPlan.*`：读工程文件、格子压平、贪心合并、平滑图形转盒子、楼层标高、门洞切墙、楼梯、Volume。不碰 Actor，便于测试。
+- `Private/LayoutSceneBuilder.*`：把计划摆进关卡（Blockout / Cube、填充图形的 Static Mesh、Volume、图标、文字、字体、NavMesh）。
 - `Public/LevelLayoutImportLibrary.h`：给蓝图和 Python 用的接口。
 - `Private/LevelLayoutImporterModule.cpp`：Tools 菜单和控制台命令。
 - 源码只用 ASCII（中文写成 `\u` 转义），避免中文 Windows 下 MSVC 按 GBK 读源码出错。
@@ -118,3 +136,13 @@ UE 5.8.4 + VS 2022（MSVC 14.44），`RunUAT BuildPlugin` 编译无警告，7 �
 | Cube | 同上 | 最大差 0.000003 cm |
 
 中文用微软雅黑生成的字体正常显示；一次撤销删掉全部 45 个 Actor，重做恢复；再次导入替换上次的 45 个；NavMesh 范围包住整个白盒。
+
+### 第 2 阶段（2026-11-23）
+
+11 组自动化测试全部通过。示例工程（加了门和一对上下楼梯）导入，Blockout 和 Cube 都是 67 个盒子、1 个网格、2 个 Volume、0 条警告：
+
+- 门洞：右墙拆成两段加门楣，留出 200 × 300 cm 的门洞；第三人称角色大小的胶囊体能直接穿过。
+- 楼梯：只建一部（1F 上楼梯和 2F 下楼梯合并），25 级、每级 20 cm，从 0 升到 500 cm；2F 地面在楼梯上方开洞，整段楼梯头顶都不碰。
+- 填充椭圆：12 边棱柱网格，面朝外、凸包碰撞正常。
+- 水：PhysicsVolume，开了 Water Volume；伤害区：PainCausingVolume，每秒 20 伤害。两种都和地面板对齐，顶在地面上 1 m。
+- 一次撤销删掉全部 80 个 Actor；再导入会替换上次的结果。
