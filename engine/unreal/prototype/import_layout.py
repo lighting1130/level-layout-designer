@@ -1,0 +1,426 @@
+"""
+第 0 阶段原型：在 Unreal Editor 5.8 里把关卡 Layout 工程文件（.json）生成成白盒。
+
+用法（需要启用 Python Editor Script Plugin）：
+  在 Output Log 底部把命令行切到 Cmd，输入：
+    py "D:/path/to/engine/unreal/prototype/import_layout.py" "D:/path/to/第一关.json"
+  不带工程文件路径时会弹出文件选择框。
+
+可选参数：
+  --wall 4        墙高（米）
+  --floor 5       层高（米）
+  --floors 1,-1   只导入这些楼层
+  --keep          保留上次生成的白盒（默认先删除同名工程上次生成的 Actor）
+  --backend auto|blockout|cube
+                  墙和地面用什么摆：装了 Blockout Tools 插件时默认用它的 Blockout_Box，
+                  否则用引擎 Cube
+  --font /Game/路径/字体
+                  文字用这个字体资产（必须是 Offline 缓存的 UFont）。不写时如果备注或图标名字里
+                  有非 ASCII 字符，会用 Windows 自带的中文字体（微软雅黑 / 黑体 / 等线 / 宋体）
+                  生成一个只含用到的字的 Offline 字体
+
+生成的东西：
+  - 墙 / 地面 / 水域 / 伤害区：每个合并后的矩形一个 Actor，可以单独移动。
+    启用了 Blockout Tools 插件时用它的 Blockout_Box（带网格材质，颜色取颜色说明），否则用引擎 Cube
+  - spawn 图标 -> PlayerStart，camera -> CameraActor，其它图标 -> 带名字的小圆柱 + 文字
+  - 备注 -> TextRenderActor（朝上，从顶视图能读）
+  - 每种颜色一个材质实例，放在 /Game/LevelLayoutPrototype/<工程名>/
+  - 全部放进 Outliner 文件夹 LevelLayout/<工程名>/<楼层>，带标签 LevelLayout:<工程名>
+  - 整次导入是一个撤销步骤
+"""
+import math
+import os
+import re
+import sys
+import zlib
+
+import unreal
+
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+import importlib
+import layout_core  # noqa: E402
+
+importlib.reload(layout_core)  # 在编辑器里改了脚本后重新运行能生效
+
+CUBE = "/Engine/BasicShapes/Cube.Cube"  # 100 cm，中心在原点
+CYLINDER = "/Engine/BasicShapes/Cylinder.Cylinder"
+BASE_MATERIAL = "/Engine/BasicShapes/BasicShapeMaterial.BasicShapeMaterial"  # 有 Color 参数
+ASSET_ROOT = "/Game/LevelLayoutPrototype"
+
+# Blockout Tools（Fab 上的商业插件，作者 Dmitry Karpukhin）。本仓库不包含它的任何文件，
+# 只在用户自己装了并启用时按资产路径引用它的蓝图；没装时退回到引擎 Cube。
+BLOCKOUT_BOX = "/BlockoutToolsPlugin/Blueprints/Blockout_Box.Blockout_Box_C"
+BLOCKOUT_GRID_SIZE_CM = 100.0  # 白盒材质网格 = 网页里 1 格
+
+
+def parse_args(argv):
+    opts = {"path": None, "wall": None, "floor": None, "floors": None, "keep": False, "backend": "auto", "font": None}
+    it = iter(argv)
+    for a in it:
+        if a == "--wall":
+            opts["wall"] = float(next(it))
+        elif a == "--floor":
+            opts["floor"] = float(next(it))
+        elif a == "--floors":
+            opts["floors"] = [int(x) for x in next(it).split(",") if x.strip()]
+        elif a == "--keep":
+            opts["keep"] = True
+        elif a == "--backend":
+            opts["backend"] = next(it)
+        elif a == "--font":
+            opts["font"] = next(it)
+        elif not a.startswith("--"):
+            opts["path"] = a
+    return opts
+
+
+def pick_file():
+    try:
+        import tkinter
+        from tkinter import filedialog
+        root = tkinter.Tk()
+        root.withdraw()
+        path = filedialog.askopenfilename(title="选择关卡 Layout 工程文件", filetypes=[("工程文件", "*.json")])
+        root.destroy()
+        return path or None
+    except Exception as e:  # 有些引擎自带的 Python 没有 tkinter
+        unreal.log_warning(f"[LevelLayout] 无法打开文件选择框（{e}），请在命令里写上工程文件路径。")
+        return None
+
+
+def safe_name(name):
+    return re.sub(r"[^0-9A-Za-z_\u4e00-\u9fff]+", "_", name).strip("_")[:60] or "Untitled"
+
+
+def hex_to_linear(hexcolor):
+    """#rrggbb（sRGB）-> 线性颜色"""
+    def lin(v):
+        v /= 255.0
+        return v / 12.92 if v <= 0.04045 else ((v + 0.055) / 1.055) ** 2.4
+    r, g, b = (int(hexcolor[n:n + 2], 16) for n in (1, 3, 5))
+    return unreal.LinearColor(r=lin(r), g=lin(g), b=lin(b), a=1.0)
+
+
+class Importer:
+    def __init__(self, plan, keep, backend="auto", font=None):
+        self.plan = plan
+        self.keep = keep
+        self.name = safe_name(plan.name)
+        self.tag = unreal.Name(f"LevelLayout:{self.name}")
+        self.actors = unreal.get_editor_subsystem(unreal.EditorActorSubsystem)
+        self.cube = unreal.load_asset(CUBE)
+        self.cylinder = unreal.load_asset(CYLINDER)
+        self.materials = {}
+        self.font = text_font(plan, self.name, font)
+        # 最后再加载 Blockout：校准要用到上面的 self.actors
+        self.blockout = None if backend == "cube" else BlockoutBackend.load(self)
+        if backend == "blockout" and self.blockout is None:
+            raise RuntimeError("没有找到 Blockout Tools 插件，请在 Edit → Plugins 里启用它，或者去掉 --backend blockout。")
+
+    # ---- 材质 ----
+    def material(self, hexcolor):
+        if hexcolor in self.materials:
+            return self.materials[hexcolor]
+        folder = f"{ASSET_ROOT}/{self.name}"
+        asset_name = f"MI_{hexcolor[1:]}"
+        path = f"{folder}/{asset_name}"
+        mi = unreal.load_asset(path) if unreal.EditorAssetLibrary.does_asset_exist(path) else None
+        if mi is None:
+            tools = unreal.AssetToolsHelpers.get_asset_tools()
+            mi = tools.create_asset(asset_name, folder, unreal.MaterialInstanceConstant, unreal.MaterialInstanceConstantFactoryNew())
+            unreal.MaterialEditingLibrary.set_material_instance_parent(mi, unreal.load_asset(BASE_MATERIAL))
+        want = hex_to_linear(hexcolor)
+        unreal.MaterialEditingLibrary.set_material_instance_vector_parameter_value(mi, "Color", want)
+        # 5.8 里设置成功也可能返回 False，所以读回来比较
+        got = unreal.MaterialEditingLibrary.get_material_instance_vector_parameter_value(mi, "Color")
+        if abs(got.r - want.r) + abs(got.g - want.g) + abs(got.b - want.b) > 1e-3:
+            unreal.log_warning(f"[LevelLayout] 材质没有 Color 参数，颜色 {hexcolor} 不会显示。")
+        unreal.MaterialEditingLibrary.update_material_instance(mi)
+        unreal.EditorAssetLibrary.save_loaded_asset(mi)
+        self.materials[hexcolor] = mi
+        return mi
+
+    # ---- 通用 ----
+    def place(self, actor, floor, label):
+        actor.set_actor_label(label)
+        actor.set_folder_path(f"LevelLayout/{self.name}/{layout_core.floor_label(floor)}")
+        tags = list(actor.get_editor_property("tags"))
+        tags.append(self.tag)
+        actor.set_editor_property("tags", tags)
+        return actor
+
+    def clear_previous(self):
+        old = [a for a in self.actors.get_all_level_actors() if self.tag in a.get_editor_property("tags")]
+        for a in old:
+            self.actors.destroy_actor(a)
+        return len(old)
+
+    # ---- 生成 ----
+    def spawn_box(self, b, index):
+        if self.blockout:
+            a = self.blockout.spawn_box(b)
+            return self.place(a, b.floor, f"{b.role}_{index:04d}")
+        loc = unreal.Vector(*b.center)
+        rot = unreal.Rotator(roll=0.0, pitch=0.0, yaw=b.yaw)
+        a = self.actors.spawn_actor_from_class(unreal.StaticMeshActor, loc, rot)
+        comp = a.get_editor_property("static_mesh_component")
+        comp.set_static_mesh(self.cube)
+        comp.set_material(0, self.material(b.color))
+        a.set_actor_scale3d(unreal.Vector(b.size[0] / 100.0, b.size[1] / 100.0, b.size[2] / 100.0))
+        if b.role in ("water", "hazard"):
+            comp.set_collision_profile_name("OverlapAllDynamic")
+        return self.place(a, b.floor, f"{b.role}_{index:04d}")
+
+    def spawn_marker(self, m, index):
+        loc = unreal.Vector(*m.location)
+        if m.actor == "player_start":
+            a = self.actors.spawn_actor_from_class(unreal.PlayerStart, loc + unreal.Vector(0, 0, 100), unreal.Rotator(roll=0.0, pitch=0.0, yaw=m.yaw))
+            return self.place(a, m.floor, f"PlayerStart_{index:03d}")
+        if m.actor == "camera":
+            a = self.actors.spawn_actor_from_class(unreal.CameraActor, loc + unreal.Vector(0, 0, 300), unreal.Rotator(roll=0.0, pitch=-30.0, yaw=m.yaw))
+            return self.place(a, m.floor, f"Camera_{index:03d}")
+        # 占位：小圆柱 + 名字
+        size = max(30.0, min(m.size_cm, 150.0))
+        a = self.actors.spawn_actor_from_class(unreal.StaticMeshActor, loc + unreal.Vector(0, 0, size / 2), unreal.Rotator(roll=0.0, pitch=0.0, yaw=m.yaw))
+        comp = a.get_editor_property("static_mesh_component")
+        comp.set_static_mesh(self.cylinder)
+        comp.set_collision_profile_name("NoCollision")
+        color = "#d9455f" if m.actor == "enemy_spawn" else "#4fc1b5"
+        comp.set_material(0, self.material(color))
+        a.set_actor_scale3d(unreal.Vector(size / 100.0, size / 100.0, size / 100.0))
+        prefix = "EnemySpawn" if m.actor == "enemy_spawn" else "Marker"
+        self.place(a, m.floor, f"{prefix}_{m.kind}_{index:03d}")
+        self.spawn_text(m.label, m.floor, (m.location[0], m.location[1], m.location[2] + size + 20), f"Label_{index:03d}", 40)
+        return a
+
+    def spawn_text(self, text, floor, loc, label, size=60):
+        # 文字平放朝上，从顶视图沿 +X 正着读
+        a = self.actors.spawn_actor_from_class(unreal.TextRenderActor, unreal.Vector(*loc), unreal.Rotator(roll=0.0, pitch=90.0, yaw=90.0))  # 已在 UE 5.8 确认：顶视图正着读
+        comp = a.get_editor_property("text_render")
+        if self.font is not None:
+            comp.set_font(self.font)  # TextRender 会按字体页自动替换文字材质里的 Font 参数
+        comp.set_text(text)
+        comp.set_world_size(size)
+        comp.set_horizontal_alignment(unreal.HorizTextAligment.EHTA_CENTER)
+        comp.set_text_render_color(unreal.Color(r=40, g=40, b=40, a=255))
+        return self.place(a, floor, label)
+
+    def run(self):
+        removed = 0 if self.keep else self.clear_previous()
+        total = len(self.plan.boxes) + len(self.plan.markers) + len(self.plan.notes)
+        with unreal.ScopedSlowTask(total, f"生成白盒：{self.plan.name}") as task:
+            task.make_dialog(True)
+            for n, b in enumerate(self.plan.boxes):
+                if task.should_cancel():
+                    break
+                task.enter_progress_frame(1)
+                self.spawn_box(b, n)
+            for n, m in enumerate(self.plan.markers):
+                task.enter_progress_frame(1)
+                self.spawn_marker(m, n)
+            for n, note in enumerate(self.plan.notes):
+                task.enter_progress_frame(1)
+                self.spawn_text(note.text, note.floor, note.location, f"Note_{n:03d}")
+        return removed
+
+
+# ---- 中文字体 ----
+# TextRender 只支持 Offline 缓存的 UFont，引擎自带的字体没有中文字形。这里用本机 Windows 字体现场生成一个，
+# 只含本次用到的字，字体文件本身不进仓库。
+CJK_FONTS = [  # (TrueTypeFontFactory 用的字体名, Windows\Fonts 下的文件)
+    ("Microsoft YaHei", "msyh.ttc"),
+    ("SimHei", "simhei.ttf"),
+    ("DengXian", "Deng.ttf"),
+    ("SimSun", "simsun.ttc"),
+]
+FONT_HEIGHT = 64
+ASCII = "".join(chr(c) for c in range(32, 127))
+
+
+def _font_is_offline(font):
+    try:
+        return font.get_editor_property("font_cache_type") == unreal.FontCacheType.OFFLINE
+    except Exception:
+        return True  # 读不到就当可以用
+
+
+def text_font(plan, project_name, font_path=None):
+    """返回 TextRender 用的 UFont；None 表示用引擎默认字体"""
+    if font_path:
+        font = unreal.load_asset(font_path)
+        if not isinstance(font, unreal.Font):
+            unreal.log_warning(f"[LevelLayout] --font {font_path} 不是字体资产，文字用默认字体（中文会显示成方框）。")
+            return None
+        if not _font_is_offline(font):
+            unreal.log_warning(f"[LevelLayout] --font {font_path} 不是 Offline 缓存的字体，TextRender 不支持，文字用默认字体。")
+            return None
+        return font
+    texts = [n.text for n in plan.notes] + [m.label for m in plan.markers]
+    extra = sorted({ch for t in texts for ch in t if ord(ch) > 126 and not ch.isspace()})
+    if not extra:
+        return None  # 全是 ASCII，默认字体就够
+    try:
+        return _generate_cjk_font(project_name, ASCII + "".join(extra))
+    except Exception as e:
+        unreal.log_warning(f"[LevelLayout] 生成中文字体失败（{e}），文字用默认字体（中文会显示成方框）。可以用 --font 指定一个 Offline 字体。")
+        return None
+
+
+def _generate_cjk_font(project_name, chars):
+    folder = f"{ASSET_ROOT}/{project_name}"
+    path = f"{folder}/Font_CJK"
+    lib = unreal.EditorAssetLibrary
+    if lib.does_asset_exist(path):
+        old = unreal.load_asset(path)
+        if isinstance(old, unreal.Font) and lib.get_metadata_tag(old, "LevelLayoutChars") == chars:
+            return old  # 同样的字已经生成过
+        if not lib.delete_asset(path):
+            # 还被别的关卡引用着删不掉：换个名字另存
+            path = f"{folder}/Font_CJK_{zlib.crc32(chars.encode('utf-8')):08x}"
+            if lib.does_asset_exist(path):
+                return unreal.load_asset(path)
+    fonts_dir = os.path.join(os.environ.get("WINDIR", "C:/Windows"), "Fonts")
+    name = next((n for n, f in CJK_FONTS if os.path.exists(os.path.join(fonts_dir, f))), None)
+    if name is None:
+        raise RuntimeError("系统里没找到微软雅黑 / 黑体 / 等线 / 宋体")
+    factory = unreal.TrueTypeFontFactory()
+    options = factory.get_editor_property("import_options")
+    data = options.get_editor_property("data")
+    data.set_editor_property("font_name", name)
+    data.set_editor_property("height", float(FONT_HEIGHT))
+    data.set_editor_property("chars", chars)
+    data.set_editor_property("enable_antialiasing", True)
+    # 引擎的 TextRender 默认材质是给距离场字体用的（读贴图的颜色通道），普通 alpha 字体会显示成实心方块，
+    # 所以生成距离场字体：先按 字号×8 渲染，再算距离场缩小
+    data.set_editor_property("use_distance_field_alpha", True)
+    data.set_editor_property("distance_field_scale_factor", 8)
+    data.set_editor_property("texture_page_width", 1024)  # 尽量一页放下
+    data.set_editor_property("texture_page_max_height", 1024)
+    options.set_editor_property("data", data)
+    factory.set_editor_property("import_options", options)
+    asset_name = path.rsplit("/", 1)[1]
+    font = unreal.AssetToolsHelpers.get_asset_tools().create_asset(asset_name, folder, unreal.Font, factory)
+    if font is None:
+        raise RuntimeError("TrueTypeFontFactory 没有生成字体")
+    pages = [t for t in unreal.ObjectIterator(unreal.Texture2D) if t.get_outer() == font]
+    for t in pages:
+        t.set_editor_property("lod_group", unreal.TextureGroup.TEXTUREGROUP_UI)  # 不要 mip，顺便触发贴图重新构建
+    if not pages:
+        raise RuntimeError("生成的字体没有贴图页")
+    lib.set_metadata_tag(font, "LevelLayoutChars", chars)
+    lib.save_loaded_asset(font)
+    unreal.log(f"[LevelLayout] 用系统字体 {name} 生成了中文字体 {font.get_path_name()}（{len(chars)} 个字，字号 {FONT_HEIGHT}）")
+    return font
+
+
+class BlockoutBackend:
+    """
+    用 Blockout Tools 的 Blockout_Box 蓝图摆盒子：带它的网格材质、可在 Details 里继续调尺寸和颜色。
+
+    它的盒子用 BoxSize（应为厘米）控制尺寸，网格体枢轴不一定在中心。为了不依赖这些细节，
+    导入前先摆一个测试盒子量一下：BoxSize 和实际尺寸的比例、枢轴相对中心的偏移，之后按量到的结果摆放。
+    """
+
+    def __init__(self, importer, cls):
+        self.imp = importer
+        self.cls = cls
+        self.factor = (1.0, 1.0, 1.0)  # 实际尺寸 / BoxSize
+        self.k = (0.0, 0.0, 0.0)  # (包围盒中心 - Actor 位置) / 实际尺寸
+
+    @classmethod
+    def load(cls, importer):
+        bp = unreal.load_class(None, BLOCKOUT_BOX) if unreal.EditorAssetLibrary.does_asset_exist(BLOCKOUT_BOX.split(".")[0]) else None
+        if bp is None:
+            return None
+        backend = cls(importer, bp)
+        try:
+            backend.calibrate()
+        except Exception as e:
+            unreal.log_warning(f"[LevelLayout] Blockout Tools 校准失败（{e}），改用引擎 Cube。")
+            return None
+        unreal.log(f"[LevelLayout] 使用 Blockout Tools：尺寸比例 {backend.factor}，枢轴偏移系数 {backend.k}")
+        return backend
+
+    def _spawn_raw(self, size, loc, yaw):
+        a = self.imp.actors.spawn_actor_from_class(self.cls, unreal.Vector(*loc), unreal.Rotator(roll=0.0, pitch=0.0, yaw=yaw))
+        a.set_editor_property("bRoundSize", False)  # 不要把尺寸取整，否则 10 cm 的细分格子会被放大
+        a.set_editor_property("BoxSize", unreal.Vector(*size))  # 改属性会触发构造脚本重新生成
+        return a
+
+    def calibrate(self):
+        test = (100.0, 200.0, 300.0)
+        a = self._spawn_raw(test, (0.0, 0.0, -100000.0), 0.0)
+        try:
+            origin, extent = self.mesh_bounds(a)
+            loc = a.get_actor_location()
+            actual = (extent.x * 2, extent.y * 2, extent.z * 2)
+            if min(actual) <= 0:
+                raise RuntimeError("测试盒子没有尺寸")
+            self.factor = tuple(actual[i] / test[i] for i in range(3))
+            off = (origin.x - loc.x, origin.y - loc.y, origin.z - loc.z)
+            self.k = tuple(off[i] / actual[i] for i in range(3))
+        finally:
+            self.imp.actors.destroy_actor(a)
+
+    @staticmethod
+    def mesh_bounds(actor):
+        """只量 StaticMeshComponent 的包围盒（蓝图里还有一个约 256 cm 的图标组件，用 get_actor_bounds 会被算进去）"""
+        lo, hi = [math.inf] * 3, [-math.inf] * 3
+        for comp in actor.get_components_by_class(unreal.StaticMeshComponent):
+            o, e, _ = unreal.SystemLibrary.get_component_bounds(comp)
+            for i, (c, h) in enumerate(((o.x, e.x), (o.y, e.y), (o.z, e.z))):
+                lo[i], hi[i] = min(lo[i], c - h), max(hi[i], c + h)
+        if lo[0] == math.inf:
+            raise RuntimeError("测试盒子没有网格体组件")
+        origin = unreal.Vector((lo[0] + hi[0]) / 2, (lo[1] + hi[1]) / 2, (lo[2] + hi[2]) / 2)
+        extent = unreal.Vector((hi[0] - lo[0]) / 2, (hi[1] - lo[1]) / 2, (hi[2] - lo[2]) / 2)
+        return origin, extent
+
+    def spawn_box(self, b):
+        size = tuple(b.size[i] / self.factor[i] for i in range(3))
+        # 枢轴偏移（局部坐标）转到世界坐标，再从目标中心减掉
+        ox, oy, oz = (b.size[i] * self.k[i] for i in range(3))
+        t = math.radians(b.yaw)
+        wx, wy = ox * math.cos(t) - oy * math.sin(t), ox * math.sin(t) + oy * math.cos(t)
+        a = self._spawn_raw(size, (b.center[0] - wx, b.center[1] - wy, b.center[2] - oz), b.yaw)
+        a.set_editor_property("BlockoutMaterialColor", hex_to_linear(b.color))
+        a.set_editor_property("bBlockoutWorldAligned", True)
+        a.set_editor_property("bBlockoutMaterialUseTopColor", False)  # 否则顶面统一盖成深灰，顶视图看不出颜色
+        a.set_editor_property("BlockoutMaterialGridSize", BLOCKOUT_GRID_SIZE_CM * self.imp.plan.meters_per_cell)
+        if b.role in ("water", "hazard"):
+            a.set_editor_property("bBlockoutEnableCustomCollision", True)
+            a.set_editor_property("BlockoutCustomCollisionProfileName", "OverlapAllDynamic")
+        return a
+
+
+def main(argv):
+    opts = parse_args(argv)
+    path = opts["path"] or pick_file()
+    if not path:
+        unreal.log_error("[LevelLayout] 没有选择工程文件。")
+        return
+    settings = layout_core.Settings()
+    if opts["wall"]:
+        settings.wall_height_m = opts["wall"]
+    if opts["floor"]:
+        settings.floor_height_m = opts["floor"]
+    settings.floors = opts["floors"]
+    try:
+        plan = layout_core.build_plan(layout_core.load_project(path), settings)
+    except (layout_core.LayoutError, OSError) as e:
+        unreal.log_error(f"[LevelLayout] {e}")
+        return
+    with unreal.ScopedEditorTransaction(f"导入关卡 Layout：{plan.name}"):
+        try:
+            importer = Importer(plan, opts["keep"], opts["backend"], opts["font"])
+        except RuntimeError as e:
+            unreal.log_error(f"[LevelLayout] {e}")
+            return
+        removed = importer.run()
+    unreal.log(f"[LevelLayout] 完成：{plan.name}（1 格 = {plan.meters_per_cell} m），"
+               f"{len(plan.boxes)} 个盒子、{len(plan.markers)} 个图标、{len(plan.notes)} 条备注；删除了上次生成的 {removed} 个 Actor。")
+    for w in plan.warnings:
+        unreal.log_warning("[LevelLayout] " + w)
+
+
+main(sys.argv[1:])
