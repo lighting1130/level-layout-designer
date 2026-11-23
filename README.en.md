@@ -50,7 +50,8 @@ It is a single self-contained HTML file with all the code inside. You can send i
 - Infinite grid: drag to pan, scroll to zoom around the cursor, trackpad pinch and two-finger scroll, two-finger touch zoom
 - Endless subdivision: zooming in splits each cell into 10×10 smaller cells, zooming out merges them, and grid levels fade smoothly between each other
 - Only the visible area is drawn, so panning far away never slows down
-- Origin axes (red X, green Y); the bottom right shows the cell under the cursor (with decimals when zoomed in) and the zoom level
+- Origin axes (red X, green Y); the bottom right shows the cursor position (in meters) and the zoom level
+- Real-world scale: by default 1 cell = 1 meter; change it in the **1 cell = _ m** field at the bottom right (for example 0.5 or 2). It is saved in the project file. Meter labels run along the axes, and their spacing adapts to the zoom (1, 2, 5, 10, 20, 50 … m, or 50 cm, 10 cm and so on when zoomed in). Brush size, cursor position, the size of the shape being drawn (width × height, length) and the scale on exported images are all shown in meters. Untick **Rulers** to hide the labels
 - Brush: click or drag to fill the cell under the cursor. The brush size follows the zoom: it paints whatever cell size you see on screen (10×10 cells when zoomed out, 1/10 or 1/100 of a cell when zoomed in)
 - **Color key** panel on the right: 9 default colors named after level elements (wall, floor, grass, water, lava, spawn, goal, enemy, item). Click to pick; edit any color or name directly, add, delete or reset to defaults. Changing a color updates every cell that uses it
 - Arc tool: press to set the start, drag to the end and release (or click start then end), then move the mouse to set the bend and click to confirm (Esc cancels). Arcs and lines can have an arrowhead at the end, the start or both

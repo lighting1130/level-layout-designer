@@ -44,6 +44,8 @@ export interface ProjectFile {
   customIcons: CustomIcon[];
   /** 图标说明：图标 -> 用户写的含义（没写的用图标默认名字） */
   iconLabels: Record<string, string>;
+  /** 一个基础格子代表的现实长度（米），可选，默认 1 */
+  metersPerCell?: number;
 }
 
 export function sanitizeIconLabels(obj: unknown): Record<string, string> {
@@ -121,6 +123,7 @@ export function parseProject(text: string): ProjectFile {
     images,
     customIcons: sanitizeCustomIcons(data.customIcons, known),
     iconLabels: sanitizeIconLabels(data.iconLabels),
+    ...(typeof data.metersPerCell === "number" && isFinite(data.metersPerCell) && data.metersPerCell > 0 ? { metersPerCell: data.metersPerCell } : {}),
   };
 }
 
