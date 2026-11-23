@@ -11,15 +11,20 @@
   --floor 5       层高（米）
   --floors 1,-1   只导入这些楼层
   --keep          保留上次生成的白盒（默认先删除同名工程上次生成的 Actor）
+  --backend auto|blockout|cube
+                  墙和地面用什么摆：装了 Blockout Tools 插件时默认用它的 Blockout_Box，
+                  否则用引擎 Cube
 
 生成的东西：
-  - 墙 / 地面 / 水域 / 伤害区：引擎自带 Cube 缩放摆放（每个合并后的矩形一个 Actor，可以单独移动）
+  - 墙 / 地面 / 水域 / 伤害区：每个合并后的矩形一个 Actor，可以单独移动。
+    启用了 Blockout Tools 插件时用它的 Blockout_Box（带网格材质，颜色取颜色说明），否则用引擎 Cube
   - spawn 图标 -> PlayerStart，camera -> CameraActor，其它图标 -> 带名字的小圆柱 + 文字
   - 备注 -> TextRenderActor（朝上，从顶视图能读）
   - 每种颜色一个材质实例，放在 /Game/LevelLayoutPrototype/<工程名>/
   - 全部放进 Outliner 文件夹 LevelLayout/<工程名>/<楼层>，带标签 LevelLayout:<工程名>
   - 整次导入是一个撤销步骤
 """
+import math
 import os
 import re
 import sys
@@ -37,9 +42,14 @@ CYLINDER = "/Engine/BasicShapes/Cylinder.Cylinder"
 BASE_MATERIAL = "/Engine/BasicShapes/BasicShapeMaterial.BasicShapeMaterial"  # 有 Color 参数
 ASSET_ROOT = "/Game/LevelLayoutPrototype"
 
+# Blockout Tools（Fab 上的商业插件，作者 Dmitry Karpukhin）。本仓库不包含它的任何文件，
+# 只在用户自己装了并启用时按资产路径引用它的蓝图；没装时退回到引擎 Cube。
+BLOCKOUT_BOX = "/BlockoutToolsPlugin/Blueprints/Blockout_Box.Blockout_Box_C"
+BLOCKOUT_GRID_SIZE_CM = 100.0  # 白盒材质网格 = 网页里 1 格
+
 
 def parse_args(argv):
-    opts = {"path": None, "wall": None, "floor": None, "floors": None, "keep": False}
+    opts = {"path": None, "wall": None, "floor": None, "floors": None, "keep": False, "backend": "auto"}
     it = iter(argv)
     for a in it:
         if a == "--wall":
@@ -50,6 +60,8 @@ def parse_args(argv):
             opts["floors"] = [int(x) for x in next(it).split(",") if x.strip()]
         elif a == "--keep":
             opts["keep"] = True
+        elif a == "--backend":
+            opts["backend"] = next(it)
         elif not a.startswith("--"):
             opts["path"] = a
     return opts
@@ -83,9 +95,12 @@ def hex_to_linear(hexcolor):
 
 
 class Importer:
-    def __init__(self, plan, keep):
+    def __init__(self, plan, keep, backend="auto"):
         self.plan = plan
         self.keep = keep
+        self.blockout = None if backend == "cube" else BlockoutBackend.load(self)
+        if backend == "blockout" and self.blockout is None:
+            raise RuntimeError("没有找到 Blockout Tools 插件，请在 Edit → Plugins 里启用它，或者去掉 --backend blockout。")
         self.name = safe_name(plan.name)
         self.tag = unreal.Name(f"LevelLayout:{self.name}")
         self.actors = unreal.get_editor_subsystem(unreal.EditorActorSubsystem)
@@ -130,6 +145,9 @@ class Importer:
 
     # ---- 生成 ----
     def spawn_box(self, b, index):
+        if self.blockout:
+            a = self.blockout.spawn_box(b)
+            return self.place(a, b.floor, f"{b.role}_{index:04d}")
         loc = unreal.Vector(*b.center)
         rot = unreal.Rotator(roll=0.0, pitch=0.0, yaw=b.yaw)
         a = self.actors.spawn_actor_from_class(unreal.StaticMeshActor, loc, rot)
@@ -192,6 +210,71 @@ class Importer:
         return removed
 
 
+class BlockoutBackend:
+    """
+    用 Blockout Tools 的 Blockout_Box 蓝图摆盒子：带它的网格材质、可在 Details 里继续调尺寸和颜色。
+
+    它的盒子用 BoxSize（应为厘米）控制尺寸，网格体枢轴不一定在中心。为了不依赖这些细节，
+    导入前先摆一个测试盒子量一下：BoxSize 和实际尺寸的比例、枢轴相对中心的偏移，之后按量到的结果摆放。
+    """
+
+    def __init__(self, importer, cls):
+        self.imp = importer
+        self.cls = cls
+        self.factor = (1.0, 1.0, 1.0)  # 实际尺寸 / BoxSize
+        self.k = (0.0, 0.0, 0.0)  # (包围盒中心 - Actor 位置) / 实际尺寸
+
+    @classmethod
+    def load(cls, importer):
+        bp = unreal.load_class(None, BLOCKOUT_BOX) if unreal.EditorAssetLibrary.does_asset_exist(BLOCKOUT_BOX.split(".")[0]) else None
+        if bp is None:
+            return None
+        backend = cls(importer, bp)
+        try:
+            backend.calibrate()
+        except Exception as e:
+            unreal.log_warning(f"[LevelLayout] Blockout Tools 校准失败（{e}），改用引擎 Cube。")
+            return None
+        unreal.log(f"[LevelLayout] 使用 Blockout Tools：尺寸比例 {backend.factor}，枢轴偏移系数 {backend.k}")
+        return backend
+
+    def _spawn_raw(self, size, loc, yaw):
+        a = self.imp.actors.spawn_actor_from_class(self.cls, unreal.Vector(*loc), unreal.Rotator(roll=0.0, pitch=0.0, yaw=yaw))
+        a.set_editor_property("bRoundSize", False)  # 不要把尺寸取整，否则 10 cm 的细分格子会被放大
+        a.set_editor_property("BoxSize", unreal.Vector(*size))  # 改属性会触发构造脚本重新生成
+        return a
+
+    def calibrate(self):
+        test = (100.0, 200.0, 300.0)
+        a = self._spawn_raw(test, (0.0, 0.0, -100000.0), 0.0)
+        try:
+            origin, extent = a.get_actor_bounds(False)
+            loc = a.get_actor_location()
+            actual = (extent.x * 2, extent.y * 2, extent.z * 2)
+            if min(actual) <= 0:
+                raise RuntimeError("测试盒子没有尺寸")
+            self.factor = tuple(actual[i] / test[i] for i in range(3))
+            off = (origin.x - loc.x, origin.y - loc.y, origin.z - loc.z)
+            self.k = tuple(off[i] / actual[i] for i in range(3))
+        finally:
+            self.imp.actors.destroy_actor(a)
+
+    def spawn_box(self, b):
+        size = tuple(b.size[i] / self.factor[i] for i in range(3))
+        # 枢轴偏移（局部坐标）转到世界坐标，再从目标中心减掉
+        ox, oy, oz = (b.size[i] * self.k[i] for i in range(3))
+        t = math.radians(b.yaw)
+        wx, wy = ox * math.cos(t) - oy * math.sin(t), ox * math.sin(t) + oy * math.cos(t)
+        a = self._spawn_raw(size, (b.center[0] - wx, b.center[1] - wy, b.center[2] - oz), b.yaw)
+        a.set_editor_property("BlockoutMaterialColor", hex_to_linear(b.color))
+        a.set_editor_property("bBlockoutWorldAligned", True)
+        a.set_editor_property("BlockoutMaterialGridSize", BLOCKOUT_GRID_SIZE_CM * self.imp.plan.meters_per_cell)
+        if b.role in ("water", "hazard"):
+            a.set_editor_property("bBlockoutEnableCustomCollision", True)
+            a.set_editor_property("BlockoutCustomCollisionProfileName", "OverlapAllDynamic")
+        return a
+
+
 def main(argv):
     opts = parse_args(argv)
     path = opts["path"] or pick_file()
@@ -210,7 +293,12 @@ def main(argv):
         unreal.log_error(f"[LevelLayout] {e}")
         return
     with unreal.ScopedEditorTransaction(f"导入关卡 Layout：{plan.name}"):
-        removed = Importer(plan, opts["keep"]).run()
+        try:
+            importer = Importer(plan, opts["keep"], opts["backend"])
+        except RuntimeError as e:
+            unreal.log_error(f"[LevelLayout] {e}")
+            return
+        removed = importer.run()
     unreal.log(f"[LevelLayout] 完成：{plan.name}（1 格 = {plan.meters_per_cell} m），"
                f"{len(plan.boxes)} 个盒子、{len(plan.markers)} 个图标、{len(plan.notes)} 条备注；删除了上次生成的 {removed} 个 Actor。")
     for w in plan.warnings:

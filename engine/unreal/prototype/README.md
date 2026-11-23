@@ -22,6 +22,7 @@
 | `--floor 5` | 层高（米），第 n 层地面在 (n−1)×层高，负 n 层在 n×层高 | 5 |
 | `--floors 1,-1` | 只导入这些楼层 | 全部 |
 | `--keep` | 保留上次生成的白盒（默认先删掉同名工程上次生成的 Actor） | 关 |
+| `--backend auto\|blockout\|cube` | 墙和地面用 Blockout Tools 的蓝图还是引擎 Cube | `auto`：装了 Blockout Tools 就用它 |
 
 整次导入是一个撤销步骤，`Ctrl+Z` 一下全部撤掉。
 
@@ -29,7 +30,7 @@
 
 | 网页里 | UE 里 |
 | --- | --- |
-| 颜色说明叫“墙体”的格子 | 引擎 Cube 缩放成的墙，高 = 墙高。相邻格子先合并成大矩形，每个矩形一个 Actor |
+| 颜色说明叫“墙体”的格子 | 墙，高 = 墙高。相邻格子先合并成大矩形，每个矩形一个 Blockout_Box（或引擎 Cube） |
 | “地面”“草地” | 30 cm 厚楼板，顶面在本层标高 |
 | “水域”“岩浆/伤害区” | 比地面低 10 cm 的薄板，碰撞为重叠（之后换成 Volume） |
 | 其它颜色（出生点、敌人等颜色） | 不生成几何 |
@@ -47,6 +48,17 @@
 
 所有 Actor 放在 Outliner 的 `LevelLayout/<工程名>/<楼层>` 文件夹，带标签 `LevelLayout:<工程名>`；颜色材质实例在 `/Game/LevelLayoutPrototype/<工程名>/`。
 
+## 和 Blockout Tools 插件配合
+
+如果项目里启用了 Fab 上的 **Blockout Tools**（Dmitry Karpukhin，引擎插件目录 `Plugins/Marketplace/Blockout…`），墙、地面、水域、伤害区会用它的 `Blockout_Box` 蓝图生成，而不是引擎 Cube：
+
+- 自带三向投影网格材质，网格大小设成网页里的 1 格（`1 格 = N m` 时为 N×100 cm），颜色取颜色说明里的颜色。
+- 生成后就是普通的 Blockout Box，可以在 Details 里继续改 Box Size、颜色，或者和 Blockout Tools 里手摆的门洞、楼梯、栏杆混用。
+- 关掉了 `Round Size`，否则 10 cm 的细分格子会被取整放大。
+- 导入前会先摆一个测试盒子，量出 `BoxSize` 和实际尺寸的比例以及枢轴位置，再按量到的结果摆放，所以不依赖它的网格体枢轴在哪。
+
+本仓库不包含 Blockout Tools 的任何文件或代码（它是商业插件），只在你本机装了时按资产路径 `/BlockoutToolsPlugin/Blueprints/Blockout_Box` 引用。没装或者加 `--backend cube` 时用引擎 Cube。
+
 ## 文件
 
 - `layout_core.py`：读工程文件、格子压平（细格子覆盖粗格子）、贪心合并矩形、平滑图形转盒子、单位换算。**不依赖 Unreal**，可以直接 `python layout_core.py 工程.json` 看生成摘要。
@@ -62,3 +74,4 @@
 3. 颜色材质：`BasicShapeMaterial` 的 `Color` 参数能否正常显示颜色。
 4. 备注和图标名字的文字朝向（平放后从顶视图是否正着读）。
 5. 大地图（上万个格子）的生成速度。
+6. Blockout Tools：用 Python 改 `BoxSize` 等蓝图变量后，构造脚本是否立即重新生成（日志里会打印量到的尺寸比例和枢轴偏移，比例应为 1）。
