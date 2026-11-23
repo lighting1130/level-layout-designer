@@ -214,7 +214,9 @@
     <div class="hud">
       <span id="hud-floor">第一层</span>
       <span id="hud-brush">笔刷: 1 格</span>
-      <span id="hud-cell">格子: 0, 0</span>
+      <span id="hud-cell">位置: 0 m, 0 m</span>
+      <label class="hud-unit" title="一个基础格子（缩放 100% 时的格子）代表的现实长度，会存进工程文件">1 格 = <input id="unit-size" type="number" min="0" step="any" value="1" aria-label="每格代表的米数" /> m</label>
+      <label class="hud-unit check" title="沿坐标轴显示米数刻度"><input id="show-rulers" type="checkbox" checked /> 刻度</label>
       <span id="hud-zoom">100%</span>
       <button id="btn-zoom-out" title="缩小 (-)">−</button>
       <button id="btn-zoom-in" title="放大 (+)">+</button>

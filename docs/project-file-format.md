@@ -47,6 +47,7 @@
 | `customIcons` | 用户导入的图标库：`[{ "id", "name" }]`，`id` 对应 `images` 里的图片 |
 | `iconLabels` | 图标说明（可选）：`{ 图标 kind: "用户写的含义" }`，没写的用图标默认名字 |
 | `currentFloor` | 导出时所在的楼层 |
+| `metersPerCell` | 一个基础格子（`grid.cellSize`，缩放 100% 时的格子）代表的现实长度，单位米（可选，默认 1） |
 | `floors` | 各楼层的内容（版本 3 新增），按楼层号从高到低 |
 | `floors[].level` | 楼层号：1 = 第一层，2 = 第二层，-1 = 负一层……没有 0 |
 | `floors[].cells` | 该层涂色的格子，后面的覆盖前面的 |

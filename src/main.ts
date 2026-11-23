@@ -2,12 +2,13 @@ import { Camera } from "./camera";
 import { captureStatic, getLang, setLang, t } from "./i18n";
 import { CELL_SIZE, SUBDIVISION, brushLevel, drawBackground, drawGrid, finestLevel, levelStep } from "./grid";
 import { CellLayer, type Cell, type Change } from "./cells";
-import { ARROW_LABELS, arrowHeads, isArrowMode, type ArrowMode, MAX_SHAPE_CELLS, SHAPE_LABELS, TooManyCellsError, arcPoints, rasterizeFill, rasterizeThickStroke, clampSides, shapePolygon, type CellIJ, type Pt, type ShapeKind } from "./shapes";
+import { ARROW_LABELS, arrowHeads, isArrowMode, type ArrowMode, MAX_SHAPE_CELLS, SHAPE_LABELS, TooManyCellsError, arcPoints, rasterizeFill, rasterizeThickStroke, clampSides, shapeBox, shapePolygon, type CellIJ, type Pt, type ShapeKind } from "./shapes";
 import { drawVector, drawVectors, hitVector, isClosed, moveVector, rotQuarter, rotateVector, vectorBounds, sanitizeVectors, type VectorShape } from "./vectors";
 import { drawNotes, moveNoteLabel, moveNotePin, type Note, type NoteBox } from "./notes";
 import { DEFAULT_OPACITY, ImageStore, clampOpacity, drawRefImages, loadImageFile, normAngle, refImageCorners, refImageLocal, type RefImage } from "./refimages";
 import { ICONS, customImageId, customKind, drawIconAt, drawIcons, hitIcon, isBuiltinIcon, sanitizeCustomIcons, type CustomIcon, type MapIcon } from "./icons";
 import { DEFAULT_EXPORT, canvasToPng, makeZip, renderExport, type ExportOptions } from "./exportimage";
+import { DEFAULT_METERS_PER_CELL, formatLength, getMetersPerCell, scaleText, setMetersPerCell, worldToMeters } from "./units";
 import { PROJECT_FORMAT, PROJECT_VERSION, floorName, parseProject, projectFileName, sanitizeFloors, sanitizeIconLabels, type FloorData, type ProjectFile } from "./project";
 
 // 先记下页面里写死的中文，之后切换语言时替换（必须在动态生成内容之前）
@@ -720,6 +721,7 @@ function frame() {
     const hiddenVec = moveDrag && selection ? new Set(selection.vectors) : undefined;
     layer.draw(ctx, cam, width, height, hidden);
     drawGrid(ctx, cam, width, height);
+    if (showRulers) drawRulers();
     for (const f of others) drawVectors(ctx, cam, f.vectors, floorAlpha(f.level));
     drawVectors(ctx, cam, hiddenVec ? vectors.filter((v) => !hiddenVec.has(v)) : vectors);
     drawDraft();
@@ -747,7 +749,8 @@ function frame() {
     hintEl.textContent = hint;
     hintEl.hidden = !hint;
     hudZoom.textContent = formatZoom(cam.zoom);
-    hudBrush.textContent = t("笔刷: {size}", { size: formatCellSize(activeLevel()) });
+    const bk = activeLevel();
+    hudBrush.textContent = t("笔刷: {size}", { size: `${formatCellSize(bk)} · ${formatLength(worldToMeters(levelStep(bk)))}` });
     hudFloor.textContent = floorName(currentLevel);
     syncImagePanel();
     selectPanel.hidden = !(selection && tool === "select" && !moveDrag);
@@ -772,15 +775,96 @@ function formatCellSize(k: number): string {
   return t("1/{n} 格", { n: n < 1e6 ? String(n) : `10^${-k}` });
 }
 
+// ---- 现实尺寸：一格 = 多少米，以及坐标刻度开关 ----
+const unitInput = $("unit-size") as HTMLInputElement;
+const RULERS_KEY = "level-layout-designer.rulers.v1";
+let showRulers = true;
+try { showRulers = localStorage.getItem(RULERS_KEY) !== "0"; } catch { /* 忽略 */ }
+const rulersInput = $("show-rulers") as HTMLInputElement;
+rulersInput.checked = showRulers;
+rulersInput.addEventListener("change", () => {
+  showRulers = rulersInput.checked;
+  try { localStorage.setItem(RULERS_KEY, showRulers ? "1" : "0"); } catch { /* 忽略 */ }
+  rulersInput.blur();
+  requestRender();
+});
+function syncUnitInput() {
+  if (document.activeElement !== unitInput) unitInput.value = String(getMetersPerCell());
+}
+syncUnitInput();
+unitInput.addEventListener("change", () => {
+  const v = Number(unitInput.value);
+  if (!(v > 0) || !isFinite(v)) { syncUnitInput(); toast(t("请输入大于 0 的数字"), true); return; }
+  setMetersPerCell(v);
+  syncUnitInput();
+  updateCursorCell(hover?.x ?? width / 2, hover?.y ?? height / 2);
+  requestRender();
+  toast(t("比例已改为 {scale}", { scale: scaleText() }));
+});
+unitInput.addEventListener("keydown", (e) => { if (e.key === "Enter" || e.key === "Escape") unitInput.blur(); });
+
 // ---- 鼠标位置 -> 格子坐标（放大细分后显示小数，精度跟随当前最细一级网格） ----
 function updateCursorCell(sx: number, sy: number) {
   const w = cam.screenToWorld(sx, sy);
-  const decimals = Math.min(12, Math.max(0, -finestLevel(cam.zoom)));
-  const f = (v: number) => {
-    const scale = Math.pow(10, decimals);
-    return (Math.floor((v / CELL_SIZE) * scale) / scale).toFixed(decimals);
+  // 精度跟随当前最细一级网格
+  const prec = worldToMeters(levelStep(finestLevel(cam.zoom)));
+  const f = (v: number) => formatLength(Math.round(worldToMeters(v) / prec) * prec, prec);
+  hudCell.textContent = t("位置: {x}, {y}", { x: f(w.x), y: f(w.y) });
+}
+
+/**
+ * 坐标刻度：沿着红色 X 轴和绿色 Y 轴标出米数，间隔随缩放自动取 1、2、5 × 10ⁿ 米，
+ * 保证屏幕上每格刻度大约 90 像素以上。坐标轴移出屏幕时，刻度贴在屏幕边缘。
+ */
+function drawRulers() {
+  const m = getMetersPerCell();
+  // 世界坐标里刻度间隔：先换成米挑一个整齐的数，再换回世界坐标
+  const minM = worldToMeters(90 / cam.zoom);
+  const p10 = Math.pow(10, Math.floor(Math.log10(minM)));
+  const stepM = [1, 2, 5, 10].map((f) => f * p10).find((v) => v >= minM - 1e-12)!;
+  const step = (stepM / m) * CELL_SIZE;
+  const o = cam.worldToScreen(0, 0);
+  const ax = Math.min(Math.max(o.y, 64), height - 48);
+  const ay = Math.min(Math.max(o.x, 8), width - 60);
+  ctx.save();
+  ctx.font = "11px system-ui, -apple-system, sans-serif";
+  ctx.lineJoin = "round";
+  ctx.lineWidth = 3;
+  ctx.strokeStyle = "rgba(30,33,39,0.9)";
+  const label = (text: string, x: number, y: number, color: string) => {
+    ctx.strokeText(text, x, y);
+    ctx.fillStyle = color;
+    ctx.fillText(text, x, y);
   };
-  hudCell.textContent = t("格子: {x}, {y}", { x: f(w.x), y: f(w.y) });
+  const decimalsFor = (n: number) => formatLength(n * stepM, stepM);
+  // X 轴刻度
+  ctx.textAlign = "center";
+  ctx.textBaseline = "top";
+  const i0 = Math.ceil(cam.x / step), i1 = Math.floor((cam.x + width / cam.zoom) / step);
+  for (let i = i0; i <= i1; i++) {
+    if (i === 0) continue;
+    const sx = (i * step - cam.x) * cam.zoom;
+    ctx.fillStyle = "rgba(232,107,107,0.8)";
+    ctx.fillRect(Math.round(sx), ax - 3, 1, 6);
+    label(decimalsFor(i), sx, ax + 5, "rgba(240,170,170,0.95)");
+  }
+  // Y 轴刻度（向下为正，和格子坐标一致）
+  ctx.textAlign = "left";
+  ctx.textBaseline = "middle";
+  const j0 = Math.ceil(cam.y / step), j1 = Math.floor((cam.y + height / cam.zoom) / step);
+  for (let j = j0; j <= j1; j++) {
+    if (j === 0) continue;
+    const sy = (j * step - cam.y) * cam.zoom;
+    ctx.fillStyle = "rgba(122,200,120,0.8)";
+    ctx.fillRect(ay - 3, Math.round(sy), 6, 1);
+    label(decimalsFor(j), ay + 6, sy, "rgba(170,225,165,0.95)");
+  }
+  if (o.x >= 0 && o.x <= width && o.y >= 0 && o.y <= height) {
+    ctx.textAlign = "left";
+    ctx.textBaseline = "top";
+    label("0", o.x + 4, o.y + 4, "rgba(215,218,224,0.9)");
+  }
+  ctx.restore();
 }
 
 // ---------------- 指针：涂色 / 平移 / 双指缩放 ----------------
@@ -994,6 +1078,20 @@ function drawDraft() {
   }
 }
 
+/** 正在画的图形的现实尺寸：直线显示长度，其他显示宽 × 高（格子模式按占到的格子算） */
+function draftSize(d: Draft): string {
+  const s = levelStep(d.k);
+  const prec = worldToMeters(s);
+  const L = (w: number) => formatLength(worldToMeters(w), prec);
+  if (d.kind === "line") {
+    const len = Math.hypot(d.b.x - d.a.x, d.b.y - d.a.y);
+    return t("长度 {len}", { len: L(d.smooth ? len : len + s) });
+  }
+  const box = shapeBox(d.a, d.b, d.constrain);
+  const extra = d.smooth ? 0 : s;
+  return t("宽 {w} × 高 {h}", { w: L(box.w + extra), h: L(box.h + extra) });
+}
+
 function draftHint(): string {
   if (tool === "arc") {
     if (!draft) return t("弧线：按下设起点，拖到终点松开");
@@ -1002,7 +1100,7 @@ function draftHint(): string {
   }
   if (tool === "note") return t("备注：点击空白处添加，点击便签编辑；拖便签或拖圆点可分别移动，连线自动伸缩");
   if (tool === "select") return selection ? t("拖动选区移动 · 方向键微调 · R 旋转 · Delete 删除 · Esc 取消") : t("框选：拖出一个框选中内容（Ctrl+A 全选当前层）");
-  if (tool === "shape") return draft ? t("松开生成；按住 Shift 画正图形") : t("图形：从一个角拖到对角");
+  if (tool === "shape") return draft ? `${t("松开生成；按住 Shift 画正图形")} · ${draftSize(draft)}` : t("图形：从一个角拖到对角");
   return "";
 }
 
@@ -2126,6 +2224,7 @@ function buildProject(): ProjectFile {
     images: Object.fromEntries([...liveImageIds()].filter((id) => imageStore.has(id)).map((id) => [id, imageStore.srcs.get(id)!])),
     customIcons,
     iconLabels,
+    metersPerCell: getMetersPerCell(),
   };
 }
 
@@ -2293,6 +2392,8 @@ function loadProject(p: ProjectFile) {
   }
   nameInput.value = p.name || t("未命名关卡");
   try { localStorage.setItem(NAME_KEY, nameInput.value); } catch { /* 忽略 */ }
+  setMetersPerCell(p.metersPerCell ?? DEFAULT_METERS_PER_CELL);
+  syncUnitInput();
   cam.zoom = Math.min(1e9, Math.max(1e-6, p.view.zoom));
   cam.centerOn(p.view.x, p.view.y, width / 2, height / 2);
   // 导入的是另一个工程，旧的撤销记录不再适用

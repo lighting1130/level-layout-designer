@@ -4,6 +4,7 @@ import type { CellLayer } from "./cells";
 import { CELL_SIZE, drawGrid, levelStep } from "./grid";
 import { customImageId, drawIconAt, drawIcons, type MapIcon } from "./icons";
 import { drawNotes, type Note } from "./notes";
+import { formatLength, getMetersPerCell } from "./units";
 import { drawRefImages, refImageBounds, type ImageStore, type RefImage } from "./refimages";
 import { drawVectors, vectorBounds, type VectorShape } from "./vectors";
 
@@ -236,7 +237,7 @@ export async function renderExport(input: RenderInput, opts: ExportOptions): Pro
       ctx.fillText(`${input.title} · ${f.name}`, 16, y + HEADER / 2);
       ctx.fillStyle = theme.sub;
       ctx.font = `13px ${FONT}`;
-      const scale = t("1 格 = {px} 像素", { px: Number((CELL_SIZE * zoom).toFixed(2)) });
+      const scale = t("1 格 = {len}（{px} 像素）", { len: formatLength(getMetersPerCell(), getMetersPerCell()), px: Number((CELL_SIZE * zoom).toFixed(2)) });
       ctx.fillText(scale, width - 16 - ctx.measureText(scale).width, y + HEADER / 2);
       y += HEADER;
     }
